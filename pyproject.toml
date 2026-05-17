@@ -24,7 +24,9 @@ classifiers = [
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
     "Topic :: Scientific/Engineering",
 ]
-dependencies = []
+dependencies = [
+    "PyYAML>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -77,7 +79,7 @@ strict = true
 files = ["src/storebro"]
 
 [[tool.mypy.overrides]]
-module = ["FreeCAD", "FreeCAD.*", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart"]
+module = ["FreeCAD", "FreeCAD.*", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart", "yaml"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

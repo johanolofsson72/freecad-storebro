@@ -1,0 +1,19 @@
+schema_version: 1
+layout_name: Alternativ5
+source: docs/references/Alternativ5.JPG
+compartments:
+  - name: ForwardCabin
+    type: forward_cabin
+    position: { x: 0.5, y: 0, z: 0.6 }
+    dimensions: { length: 2.5, width: 2.0, height: 1.2 }
+    description: V-berth forward cabin (day-cruiser variant)
+  - name: Head
+    type: head
+    position: { x: 3.0, y: 0, z: 0.5 }
+    dimensions: { length: 1.0, width: 1.4, height: 1.4 }
+    description: Forward head
+  - name: Salon
+    type: salon
+    position: { x: 4.0, y: 0, z: 0.5 }
+    dimensions: { length: 5.5, width: 2.6, height: 1.8 }
+    description: Combined salon with integrated galley (no separate galley)

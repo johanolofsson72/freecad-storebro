@@ -46,7 +46,7 @@ This is alpha software. The hull module (spec 001) is the first deliverable. Sub
 | `storebro.hull` | [001](specs/001-hull-module/) | v0.1.0-alpha (in progress) |
 | `storebro.export` | [002](specs/002-export-module/) | v0.2.0-alpha (implemented; geometry tests pending FreeCAD host) |
 | `storebro.deck` | [003](specs/003-deck-module/) | v0.3.0-alpha (implemented; geometry tests pending FreeCAD host) |
-| `storebro.interior` | [004](specs/INDEX.md) | not started |
+| `storebro.interior` | [004](specs/004-interior-module/) | v0.4.0-alpha (implemented; geometry tests pending FreeCAD host) |
 | `storebro.cli` | [005](specs/INDEX.md) | not started |
 
 ## License

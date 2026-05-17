@@ -36,8 +36,14 @@ from storebro.hull import (
     HullParameters,
     build_hull,
 )
+from storebro.interior import (
+    Interior,
+    InteriorConstructionError,
+    InteriorParameterError,
+    build_interior,
+)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Deck",
@@ -51,9 +57,13 @@ __all__ = [
     "HullConstructionError",
     "HullParameterError",
     "HullParameters",
+    "Interior",
+    "InteriorConstructionError",
+    "InteriorParameterError",
     "__version__",
     "build_deck",
     "build_hull",
+    "build_interior",
     "export_brep",
     "export_fcstd",
     "export_step",

@@ -1,0 +1,24 @@
+schema_version: 1
+layout_name: Alternativ2
+source: docs/references/Alternativ2.JPG
+compartments:
+  - name: ForwardCabin
+    type: forward_cabin
+    position: { x: 0.4, y: 0, z: 0.5 }
+    dimensions: { length: 2.4, width: 2.0, height: 1.2 }
+    description: V-berth forward cabin
+  - name: Galley
+    type: galley
+    position: { x: 2.8, y: 0, z: 0.5 }
+    dimensions: { length: 1.3, width: 1.8, height: 1.4 }
+    description: Galley moved forward of head (fly-bridge access variant)
+  - name: Head
+    type: head
+    position: { x: 4.1, y: 0, z: 0.5 }
+    dimensions: { length: 1.0, width: 1.4, height: 1.4 }
+    description: Aft head
+  - name: Salon
+    type: salon
+    position: { x: 5.1, y: 0, z: 0.5 }
+    dimensions: { length: 3.9, width: 2.6, height: 1.7 }
+    description: Aft salon

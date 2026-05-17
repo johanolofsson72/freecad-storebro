@@ -1,0 +1,413 @@
+-- allium: 3
+--
+-- Interior module specification (formal). Derived from
+-- specs/004-interior-module/spec.md after /speckit-clarify (5 auto-picked
+-- clarifications applied). Full pipeline track per .claude/rules/specs.md.
+--
+-- Constitutional principles that govern this module:
+--   I.   Parametric Everything       (every compartment dim named in YAML)
+--   II.  Reproducibility             (structural determinism per (hull,deck,layout))
+--   III. FreeCAD-Idiomatic           (Part / PartDesign / Sketcher — no mesh)
+--   IV.  Reference Fidelity          (defaults match RC34 1972 cutaways within ±5%)
+--   VII. FreeCAD Version Discipline  (lazy first-call shared check)
+--
+-- First spec with external YAML data fixtures shipped inside the package.
+-- First spec with cross-module dependency on TWO sibling modules (hull + deck).
+
+-- ===== Enums =====
+
+enum CompartmentType { forward_cabin | galley | head | salon }
+
+-- ===== External entities (from spec 001 + spec 003) =====
+
+external entity Hull {
+    label: String
+    document: FreeCADDocument
+    body: FreeCADBody
+    parameters: HullParameters
+}
+
+external entity HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    freeboard: Decimal
+    sheer_height_aft: Decimal
+    sheer_height_fwd: Decimal
+}
+
+external entity Deck {
+    label: String
+    document: FreeCADDocument
+    hull: Hull
+    deck_plate: DeckPlate
+}
+
+external entity DeckPlate {
+    body: FreeCADBody
+    thickness: Decimal
+}
+
+external entity FreeCADDocument {
+    name: String
+    is_active: Boolean
+}
+
+external entity FreeCADBody {
+    label: String
+    document: FreeCADDocument
+    volume: Decimal
+    bbox_length: Decimal
+    bbox_width: Decimal
+    bbox_height: Decimal
+    is_parametric_in_gui: Boolean
+    is_symmetric_about_centerline: Boolean
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+}
+
+-- ===== Configuration =====
+
+config {
+    schema_version_v1: Integer = 1
+    reference_fidelity_tolerance_pct: Decimal = 5.0
+    build_budget_seconds: Decimal = 60.0
+    min_invalid_input_test_cases: Integer = 10
+    overlap_volume_threshold_m3: Decimal = 0.000001
+    default_layout_name: String = "Alternativ3"
+    supported_freecad_min_major: Integer = 1
+    supported_freecad_min_minor: Integer = 1
+}
+
+-- ===== Value objects (YAML schema mirror) =====
+
+value Position3D {
+    x: Decimal
+    y: Decimal
+    z: Decimal
+
+    invariant CenterlineSymmetric { this.y = 0 }
+}
+
+value Dimensions3D {
+    length: Decimal
+    width: Decimal
+    height: Decimal
+
+    invariant Positive {
+        this.length > 0 and this.width > 0 and this.height > 0
+    }
+}
+
+value CompartmentSpec {
+    name: String
+    compartment_type: CompartmentType
+    position: Position3D
+    dimensions: Dimensions3D
+    description: String?
+}
+
+value LayoutSpec {
+    schema_version: Integer
+    layout_name: String
+    source: String
+    compartments: Set<CompartmentSpec>
+
+    invariant SchemaVersionV1   { this.schema_version = 1 }
+    invariant NonEmptyName      { this.layout_name != "" }
+    invariant AtLeastOneCompartment { this.compartments.count >= 1 }
+    invariant UniqueCompartmentNames {
+        -- Encoded as a single-variable iteration with a count predicate:
+        -- every compartment's name appears exactly once in the set.
+        for c in this.compartments:
+            this.compartments.count_where(x => x.name = c.name) = 1
+    }
+}
+
+-- ===== Exception entities (FR-015, public API) =====
+
+entity InteriorParameterError {
+    source: String          -- file path or canonical fixture name
+    compartment_name: String?
+    field: String?
+    reason: String
+    message: String
+}
+
+entity InteriorConstructionError {
+    layout_name: String?
+    hull: Hull?
+    deck: Deck?
+    underlying_message: String
+    detected_version: FreeCADVersion?
+    supported_range: String?
+}
+
+-- ===== Compartment Body wrapper =====
+
+entity Compartment {
+    spec: CompartmentSpec
+    body: FreeCADBody
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+    invariant PositiveVolume           { this.body.volume > 0 }
+}
+
+-- ===== Return aggregate =====
+
+entity Interior {
+    layout: LayoutSpec
+    hull: Hull
+    deck: Deck
+    document: FreeCADDocument
+    label: String
+    build_duration_seconds: Decimal
+    compartments: Set<Compartment>
+
+    invariant DocumentMatchesHull   { this.document = this.hull.document }
+    invariant DocumentMatchesDeck   { this.document = this.deck.document }
+    invariant WithinBuildBudget     { this.build_duration_seconds <= 60 }
+    invariant CompartmentCountMatchesLayout {
+        this.compartments.count = this.layout.compartments.count
+    }
+}
+
+-- ===== Rules =====
+
+-- FR-001 + FR-016 + FR-017: public builder
+rule BuildInterior {
+    when: BuildInterior(hull, deck, layout, document, name)
+
+    -- FR-013 (lazy version check)
+    requires:
+        FreeCADVersion.major >= 1 and FreeCADVersion.minor >= 1
+
+    -- FR-004 + FR-019 + Edge Cases: pre-FreeCAD validation
+    requires:
+        hull != null
+        hull.body.volume > 0
+        deck != null
+        deck.deck_plate.body.volume > 0
+        deck.document = hull.document
+        layout.schema_version = 1
+        layout.compartments.count >= 1
+
+    ensures:
+        let resolved_doc = document ?? hull.document
+        let resolved_label = name ?? ("Interior_" + layout.layout_name)
+        Interior.created(
+            layout: layout,
+            hull: hull,
+            deck: deck,
+            document: resolved_doc,
+            label: resolved_label
+        )
+}
+
+-- FR-004 + Edge Cases: null/empty hull
+rule RejectInvalidHull {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        hull = null or hull.body.volume = 0
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-004 + Edge Cases: null/empty deck
+rule RejectInvalidDeck {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        deck = null or deck.deck_plate.body.volume = 0
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-019: hull/deck on different documents
+rule RejectHullDeckDocumentMismatch {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        deck.document != hull.document
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-016: caller-supplied document mismatch
+rule RejectCallerDocumentMismatch {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        document != null and document != hull.document
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-021: missing or unknown schema_version
+rule RejectUnknownSchemaVersion {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        layout.schema_version != 1
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-004 + Edge Cases: zero-compartment layout
+rule RejectEmptyLayout {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        layout.compartments.count = 0
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-010 + Edge Cases: compartment outside hull envelope
+rule RejectCompartmentOutsideHull {
+    when: BuildInterior(hull, deck, layout, document, name)
+    for c in layout.compartments where
+        c.position.x < 0
+        or c.position.x + c.dimensions.length > hull.parameters.loa
+        or c.dimensions.width > hull.parameters.beam_max:
+            ensures: InteriorParameterError.raised()
+}
+
+-- FR-012 + Edge Cases: compartment volumetric overlap (face-touching OK)
+rule RejectCompartmentOverlap {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        Geometry.any_pair_overlaps_by_more_than(layout.compartments, 0.000001) = true
+    ensures: InteriorParameterError.raised()
+}
+
+-- FR-013 + FR-015: unsupported FreeCAD version
+rule RejectUnsupportedFreeCADVersion {
+    when: BuildInterior(hull, deck, layout, document, name)
+    requires:
+        FreeCADVersion.major < 1
+        or (FreeCADVersion.major = 1 and FreeCADVersion.minor < 1)
+    ensures: InteriorConstructionError.raised()
+}
+
+-- FR-015 + FR-018 + Edge Cases: FreeCAD-side failure mid-build → rollback +
+-- wrap in InteriorConstructionError
+rule WrapFreeCADConstructionFailure {
+    when: FreeCADConstructionFailure(hull, deck, layout)
+    ensures: InteriorConstructionError.raised()
+}
+
+-- FR-001 + FR-002: canonical name layout loader
+rule LoadCanonicalLayout {
+    when: LoadLayout(name)
+    requires:
+        name in {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}
+    ensures:
+        LayoutSpec.loaded_from_package_fixture(name)
+}
+
+-- FR-001: custom YAML path layout loader
+rule LoadCustomLayoutFromPath {
+    when: LoadLayout(path)
+    requires:
+        path != null
+        not (path in {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"})
+        Filesystem.is_file(path) = true
+    ensures:
+        LayoutSpec.loaded_from_path(path)
+}
+
+-- Edge case: nonexistent path AND not a canonical name
+rule RejectUnknownLayoutReference {
+    when: LoadLayout(name_or_path)
+    requires:
+        not (name_or_path in {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"})
+        Filesystem.is_file(name_or_path) = false
+    ensures: InteriorParameterError.raised()
+}
+
+-- ===== Global invariants =====
+
+-- FR-005 + SC-003: structural determinism
+invariant StructuralDeterminism {
+    for i in Interior:
+        for c in i.compartments:
+            c.body.volume = Interior.canonical_compartment_volume_for(i.hull, i.deck, i.layout, c.spec.name)
+            and c.body.bbox_length = Interior.canonical_compartment_bbox_length_for(i.hull, i.deck, i.layout, c.spec.name)
+}
+
+-- FR-009: every compartment is symmetric about the centerline
+invariant AllCompartmentsSymmetric {
+    for i in Interior:
+        for c in i.compartments:
+            c.body.is_symmetric_about_centerline = true
+}
+
+-- FR-010 + SC-009: every compartment fits inside the hull envelope
+invariant CompartmentsInsideHullEnvelope {
+    for i in Interior:
+        for c in i.compartments:
+            c.spec.position.x >= 0
+            and c.spec.position.x + c.spec.dimensions.length <= i.hull.parameters.loa
+            and c.spec.dimensions.width <= i.hull.parameters.beam_max
+}
+
+-- FR-012: no two compartments overlap volumetrically (face-touching OK)
+invariant CompartmentsNonOverlapping {
+    for i in Interior:
+        Geometry.any_pair_overlaps_by_more_than(i.compartments, 0.000001) = false
+}
+
+-- FR-011: leaf-deps include hull + deck only, plus shared internal _freecad_check
+invariant InteriorDependsOnHullAndDeckOnly {
+    Module.imports("storebro.interior", "storebro.hull") = true
+    and Module.imports("storebro.interior", "storebro.deck") = true
+    and not Module.imports("storebro.interior", "storebro.export")
+    and not Module.imports("storebro.interior", "storebro.cli")
+}
+
+-- Constitution III + FR-006: no raw mesh inside interior module
+invariant NoMeshInInteriorModule {
+    not Module.uses("storebro.interior", "Mesh.Mesh")
+}
+
+-- SC-006: every canonical layout + every compartment type has a geometry test
+invariant TestCoverageOnCanonicalLayouts {
+    for layout_name in {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}:
+        Tests.has_geometry_property_test_for_layout(layout_name)
+    for ct in {forward_cabin, galley, head, salon}:
+        Tests.has_geometry_property_test_for_compartment_type(ct)
+}
+
+-- SC-007: validation error messages cite source + offending compartment + reason
+invariant ValidationErrorMessageFormat {
+    for e in InteriorParameterError:
+        e.message_contains(e.source)
+        and (e.compartment_name = null or e.message_contains(e.compartment_name))
+}
+
+-- SC-008: failed builds leave no partial compartments
+invariant NoPartialInteriorOnFailure {
+    for failure in FreeCADConstructionFailure:
+        Document.compartment_bodies_added_during(failure).count = 0
+}
+
+-- ===== Open questions and deferred items =====
+
+open question "Exact compartment positions and dimensions for each of the five canonical Alternativ1-5 layouts are estimate-grade in spec.md. /speckit-plan will pin specific values per layout from docs/references/AlternativN.JPG cutaway measurements. The CompartmentsInsideHullEnvelope and DefaultMatchesReferenceFidelity invariants become verifiable once the values are pinned. ±5% tolerance per FR-003 applies once pinned."
+
+deferred Interior.engine_room
+deferred Interior.aft_cabin
+deferred Interior.dinette
+deferred Interior.wet_locker
+-- All non-core compartment types deferred to v1.1+ (FR-008 caps v1.0 at 4 types).
+
+deferred Interior.curved_bulkheads
+-- v1.0 compartments are axis-aligned boxes. v1.1+ may add bulkheads that follow
+-- the hull's curvature for more accurate volume estimation.
+
+deferred Interior.furniture
+-- Bunks, settees, galley cabinetry, hatches, doors all deferred. v1.0
+-- compartments are empty volumes.
+
+deferred Interior.asymmetric_layouts
+-- v1.0 schema requires position.y = 0 (CenterlineSymmetric invariant). v1.1+
+-- may relax this for off-center compartments.
+
+deferred Interior.glazing
+-- Cabin trunk window cutouts (also deferred in spec 003 clarify Q1) will
+-- eventually be cut from the interior compartment volumes, not just the
+-- cabin trunk shell. Coordinated v1.1+ work.
