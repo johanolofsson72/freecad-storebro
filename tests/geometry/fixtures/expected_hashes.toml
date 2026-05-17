@@ -19,4 +19,17 @@
 #   uv run python tests/geometry/fixtures/refresh_hashes.py
 # and paste the printed stanzas into this file.
 
-# (no baselines yet — populate via refresh_hashes.py on a FreeCAD-equipped host)
+# Seeded against FreeCAD 1.1.1
+# Source: HullParameters() defaults (Storebro Royal Cruiser 34, 1972)
+
+[step__1_1_1__b8fac77b0986__44136fa355b3]
+sha256 = "273dcf772c2cff97873249757978e681df294512b1a0da4548914cfab92a6cd9"
+
+[stl__1_1_1__b8fac77b0986__50ebc2c69987]
+sha256 = "db0ebdd3574df5c3c67c4223e552a939c9fce3f72980b775cea4ea2c93c0e27d"
+
+[brep__1_1_1__b8fac77b0986__44136fa355b3]
+sha256 = "658ba229a8cfca7f85223f2df9244c381ee0d8008fff77402668058409f4096a"
+
+[fcstd__1_1_1__b8fac77b0986__44136fa355b3]
+sha256 = "64a06523c0ebb8233b5a3c51433df9d340ced4e91922fdf3e269354ef8b47ef1"

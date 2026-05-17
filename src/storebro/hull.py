@@ -12,6 +12,7 @@ See specs/001-hull-module/ for the full specification.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import time
 from dataclasses import dataclass, field
@@ -341,93 +342,143 @@ def _resolve_body_label(name: str | None) -> str:
     return name if name is not None else "Hull"
 
 
-def _create_station_sketch(profile: _StationProfile, body: Any, parent_doc: Any) -> Any:
-    """Create a FreeCAD Sketch describing one station's half-section.
+def _get_origin_plane(body: Any, plane_name: str) -> Any:
+    """Find a named reference plane on the Body's auto-created Origin.
 
-    The sketch lives on the YZ plane translated to ``profile.x_position``.
-    Geometry is a closed polygon: keel → bottom outer → top outer → freeboard
-    top → centerline → keel. For the terminal stem station the polygon
-    collapses to a single vertical line at y=0.
+    ``plane_name`` is one of ``"XY_Plane"``, ``"XZ_Plane"``, ``"YZ_Plane"``.
+    Matches the Origin feature's internal ``Name`` (stable across locales),
+    not its ``Label`` (which is localized, e.g. "XY-plane"). Returns the
+    FreeCAD ``App::Plane`` reference geometry. Raises ``RuntimeError`` if
+    the plane cannot be located.
+    """
+    for feat in body.Origin.OriginFeatures:
+        # FreeCAD suffixes Origin geometry names when a second Body lands in
+        # the same document (`YZ_Plane` → `YZ_Plane001`). Match on the prefix
+        # before the auto-numbering suffix.
+        if feat.Name.rstrip("0123456789") == plane_name:
+            return feat
+    raise RuntimeError(f"Could not locate Origin.{plane_name} on body {body.Label!r}")
 
-    The sketch is added to the supplied PartDesign Body so it participates
-    in the Body's parametric history. The Body argument is reserved for
-    future expression-engine bindings to Body-level properties; the current
-    implementation hard-codes the dimensions and lets the loft re-derive
-    on every recompute.
+
+_MM_PER_M = 1000.0
+"""FreeCAD's internal length unit is mm; HullParameters fields are in meters."""
+
+
+def _create_datum_plane(profile: _StationProfile, body: Any) -> Any:
+    """Create a PartDesign::Plane datum at the station's X coordinate.
+
+    Per data-model §4 + research.md R3 (clarify Q1: Body-local frame). The
+    datum attaches to the Body's local YZ reference plane, then offsets
+    along X to ``profile.x_position * 1000`` (FreeCAD-internal mm) so the
+    station sketch's plane sits parallel to YZ at the right longitudinal
+    position.
+    """
+    import FreeCAD
+
+    datum_name = f"HullDatum{profile.name}"
+    datum = body.newObject("PartDesign::Plane", datum_name)
+    yz_plane = _get_origin_plane(body, "YZ_Plane")
+    datum.AttachmentSupport = [(yz_plane, "")]
+    datum.MapMode = "FlatFace"
+    # AttachmentOffset is in the support's LOCAL frame. For a plane attached
+    # to Origin.YZ_Plane, the support's local Z axis is the global X axis
+    # (the YZ plane's normal). Put the X-offset in local Z, not local X.
+    datum.AttachmentOffset = FreeCAD.Placement(
+        FreeCAD.Vector(0.0, 0.0, profile.x_position * _MM_PER_M),
+        FreeCAD.Rotation(),
+    )
+    return datum
+
+
+def _create_station_sketch(profile: _StationProfile, body: Any, datum: Any) -> Any:
+    """Create a Sketcher::SketchObject for one station's half-section.
+
+    Per data-model §5 + §6. The sketch attaches to ``datum`` (a
+    PartDesign::Plane offset to ``profile.x_position`` along X). The sketch's
+    local x-axis maps to the Body's Y-axis (transverse beam), the sketch's
+    local y-axis maps to the Body's Z-axis (vertical).
+
+    For non-terminal stations the geometry is a closed pentagon spanning
+    keel → bottom outer → top outer → outer sheer → deck → back to keel.
+    For the terminal stem station the geometry collapses to a degenerate
+    zero-length line at the origin so PartDesign::AdditiveLoft interprets
+    it as a pointed-end profile (research.md R6).
     """
     import FreeCAD
     import Part
 
-    _ = body  # reserved for expression-engine bindings; see _bind_parameters_to_body_properties
-    sketch_name = f"Sketch_{profile.name}"
-
-    placement = FreeCAD.Placement(
-        FreeCAD.Vector(profile.x_position, 0.0, 0.0),
-        FreeCAD.Rotation(FreeCAD.Vector(0, 1, 0), 90.0),
-    )
+    sketch_name = f"HullStation{profile.name}"
+    sketch = body.newObject("Sketcher::SketchObject", sketch_name)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
 
     if profile.is_terminal:
-        # Stem station: a single vertical centerline segment from
-        # keel-depth to freeboard-top, on the centerline (y=0).
-        segment = Part.LineSegment(
-            FreeCAD.Vector(0.0, -profile.keel_depth, 0.0),
-            FreeCAD.Vector(0.0, profile.freeboard, 0.0),
-        )
-        shape = Part.Shape([segment])
+        # Single Part.Point profile — PartDesign::AdditiveLoft accepts a
+        # vertex profile as a degenerate end, producing a pointed bow.
+        point = Part.Point(FreeCAD.Vector(0.0, 0.0, 0.0))
+        sketch.addGeometry(point, False)
     else:
-        # Half-section polygon (port half).
-        pts = [
-            FreeCAD.Vector(0.0, -profile.keel_depth, 0.0),
-            FreeCAD.Vector(profile.half_beam_at_bottom, -profile.keel_depth * 0.6, 0.0),
-            FreeCAD.Vector(profile.half_beam_at_top, 0.0, 0.0),
-            FreeCAD.Vector(profile.half_beam_at_top, profile.freeboard, 0.0),
-            FreeCAD.Vector(0.0, profile.freeboard, 0.0),
-            FreeCAD.Vector(0.0, -profile.keel_depth, 0.0),
-        ]
-        segments = [Part.LineSegment(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
-        shape = Part.Shape(segments)
+        import Sketcher
 
-    sketch = parent_doc.addObject("Part::Feature", sketch_name)
-    sketch.Shape = shape
-    sketch.Placement = placement
+        # Scale meters → mm (FreeCAD's internal unit).
+        keel_depth_mm = profile.keel_depth * _MM_PER_M
+        half_beam_top_mm = profile.half_beam_at_top * _MM_PER_M
+        half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
+        freeboard_mm = profile.freeboard * _MM_PER_M
+
+        pts = [
+            FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
+            FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0),
+            FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0),
+            FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
+            FreeCAD.Vector(0.0, freeboard_mm, 0.0),
+            FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
+        ]
+        line_ids: list[int] = []
+        for i in range(len(pts) - 1):
+            seg = Part.LineSegment(pts[i], pts[i + 1])
+            line_id = sketch.addGeometry(seg, False)
+            line_ids.append(line_id)
+        # Coincidence constraints: end of line_i (PointPos=2) → start of line_{i+1} (PointPos=1).
+        # Without these the sketcher sees 5 disjoint segments, not a closed wire,
+        # and PartDesign::AdditiveLoft produces a zero-volume result.
+        for i in range(len(line_ids)):
+            next_i = (i + 1) % len(line_ids)
+            sketch.addConstraint(
+                Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[next_i], 1)
+            )
+
     return sketch
 
 
-def _apply_loft_and_mirror(body: Any, sketches: list[Any], parent_doc: Any) -> None:
-    """Apply the loft + mirror operations that close the hull shell.
+def _apply_loft_and_mirror(body: Any, sketches: list[Any]) -> tuple[Any, Any]:
+    """Build the PartDesign feature stack: AdditiveLoft + Mirrored.
 
-    Constructs a Part::Loft solid through the five station sketches in order
-    (transom → aft → amidships → fwd → stem), then a Part::Mirroring across
-    the XZ plane (y → -y) to satisfy FR-009 symmetry about the centerline.
-    Both features are added to the document and listed as members of the
-    Body so the FreeCAD GUI shows the parametric history.
+    Consumes the five station sketches in order (transom → stem) to produce
+    a port half-hull via ``PartDesign::AdditiveLoft``, then reflects the
+    loft across the Body's XZ plane via ``PartDesign::Mirrored`` to produce
+    the closed full-hull solid. ``Body.Tip`` is set to the mirror feature
+    so ``body.Shape`` exposes the full hull.
 
-    Note: while research.md R2 prefers PartDesign::AdditiveLoft and
-    PartDesign::Mirrored for full editability, the v0.1.0-alpha
-    implementation uses Part-workbench equivalents because PartDesign loft
-    requires more setup (sketches must be inside the Body, on consistent
-    planes, etc.). The Part-workbench variant is still editable in the GUI
-    and meets FR-006 (no raw mesh) — the upgrade to PartDesign is tracked
-    as future work in CHANGELOG.
+    Returns ``(loft, mirror)`` so the caller can register both features in
+    the rollback list (FR-012).
     """
-    loft = parent_doc.addObject("Part::Loft", "HullLoft")
-    loft.Sections = sketches
-    loft.Solid = True
-    loft.Ruled = False
+    loft = body.newObject("PartDesign::AdditiveLoft", "HullLoft")
+    loft.Profile = (sketches[0], [""])
+    loft.Sections = [(s, [""]) for s in sketches[1:]]
+    # Ruled=True: piecewise-linear interpolation between profiles. Required
+    # because the loft mixes 5-edge pentagons with a single-point stem, and
+    # B-spline interpolation (Ruled=False) twists wildly through the profile
+    # transition, producing a self-intersecting solid with garbage bbox.
+    loft.Ruled = True
     loft.Closed = False
 
-    mirror = parent_doc.addObject("Part::Mirroring", "HullMirror")
-    mirror.Source = loft
-    mirror.Normal = (0.0, 1.0, 0.0)  # mirror across XZ plane
-    mirror.Base = (0.0, 0.0, 0.0)
+    mirror = body.newObject("PartDesign::Mirrored", "HullMirror")
+    mirror.Originals = [loft]
+    mirror.MirrorPlane = (_get_origin_plane(body, "XZ_Plane"), [""])
 
-    fusion = parent_doc.addObject("Part::MultiFuse", "HullFusion")
-    fusion.Shapes = [loft, mirror]
-
-    body.addObject(loft)
-    body.addObject(mirror)
-    body.addObject(fusion)
-    body.Tip = fusion
+    body.Tip = mirror
+    return (loft, mirror)
 
 
 def _bind_parameters_to_body_properties(body: Any, parameters: HullParameters) -> None:
@@ -572,23 +623,40 @@ def build_hull(
     body_label = _resolve_body_label(name)
 
     started = time.perf_counter()
+    added: list[Any] = []
     try:
         body = target_doc.addObject("PartDesign::Body", "HullBody")
+        added.append(body)
         body.Label = body_label
+
+        # Recompute once now so the auto-created Origin's reference planes
+        # are populated and accessible via body.Origin.OriginFeatures before
+        # we attach datums/sketches to them.
+        target_doc.recompute()
 
         _bind_parameters_to_body_properties(body, resolved_params)
 
-        sketches = [
-            _create_station_sketch(profile, body, target_doc)
-            for profile in _compute_stations(resolved_params)
-        ]
+        sketches: list[Any] = []
+        for profile in _compute_stations(resolved_params):
+            datum = _create_datum_plane(profile, body)
+            added.append(datum)
+            sketch = _create_station_sketch(profile, body, datum)
+            added.append(sketch)
+            sketches.append(sketch)
 
-        _apply_loft_and_mirror(body, sketches, target_doc)
+        loft, mirror = _apply_loft_and_mirror(body, sketches)
+        added.extend([loft, mirror])
 
         target_doc.recompute()
     except HullConstructionError:
+        for obj in reversed(added):
+            with contextlib.suppress(BaseException):
+                target_doc.removeObject(obj.Name)
         raise
     except BaseException as underlying:
+        for obj in reversed(added):
+            with contextlib.suppress(BaseException):
+                target_doc.removeObject(obj.Name)
         raise HullConstructionError(
             "FreeCAD failed to construct hull with parameters "
             f"{resolved_params!r} — {type(underlying).__name__}: {underlying}",

@@ -30,6 +30,17 @@ from storebro.hull import Hull, HullParameters
 if TYPE_CHECKING:
     pass
 
+_MM_PER_M = 1000.0
+"""FreeCAD's internal length unit is mm; DeckParameters / HullParameters are in meters."""
+
+
+def _vec_m(x: float, y: float, z: float) -> Any:
+    """Build a FreeCAD.Vector from meter-valued coordinates (scaled to mm)."""
+    import FreeCAD
+
+    return FreeCAD.Vector(x * _MM_PER_M, y * _MM_PER_M, z * _MM_PER_M)
+
+
 __all__ = [
     "Deck",
     "DeckConstructionError",
@@ -481,13 +492,12 @@ def _build_deck_plate(
     added: list[Any],
 ) -> DeckPlate:
     """Build the 3D deck plate (FR-010, FR-007)."""
-    import FreeCAD
     import Part
 
     samples = _sample_hull_sheer(hull)
     # Build the perimeter as a closed wire on both halves (positive y + mirrored).
-    points_port = [FreeCAD.Vector(x, y, z) for x, y, z in samples]
-    points_starboard = [FreeCAD.Vector(x, -y, z) for x, y, z in reversed(samples)]
+    points_port = [_vec_m(x, y, z) for x, y, z in samples]
+    points_starboard = [_vec_m(x, -y, z) for x, y, z in reversed(samples)]
     perimeter_pts = points_port + points_starboard[1:-1] + [points_port[0]]
 
     edges = [
@@ -496,7 +506,7 @@ def _build_deck_plate(
     ]
     wire = Part.Wire([e.toShape() for e in edges])
     face = Part.Face(wire)
-    plate_solid = face.extrude(FreeCAD.Vector(0, 0, -parameters.deck_plate_thickness))
+    plate_solid = face.extrude(_vec_m(0, 0, -parameters.deck_plate_thickness))
 
     obj = target_doc.addObject("Part::Feature", "Deck_DeckPlate")
     obj.Shape = plate_solid
@@ -515,7 +525,6 @@ def _build_cabin_trunk(
     added: list[Any],
 ) -> CabinTrunk:
     """Build the rounded-corner cabin trunk prism (FR-007)."""
-    import FreeCAD
     import Part
 
     hp = hull.parameters
@@ -532,15 +541,12 @@ def _build_cabin_trunk(
     _ = _corner_radius_clamped  # v0.3.0-alpha: rectangle prism, fillet pending
     # Build a centered rounded rectangle via a simple rectangle (Part.makePlane
     # places its corner at origin; we move it after).
-    rect = Part.makePlane(parameters.cabin_trunk_length, parameters.cabin_trunk_width)
-    rect_solid = rect.extrude(FreeCAD.Vector(0, 0, parameters.cabin_trunk_height))
-    rect_solid.translate(
-        FreeCAD.Vector(
-            x_center - half_l,
-            -half_w,
-            deck_top_z,
-        )
+    rect = Part.makePlane(
+        parameters.cabin_trunk_length * _MM_PER_M,
+        parameters.cabin_trunk_width * _MM_PER_M,
     )
+    rect_solid = rect.extrude(_vec_m(0, 0, parameters.cabin_trunk_height))
+    rect_solid.translate(_vec_m(x_center - half_l, -half_w, deck_top_z))
 
     obj = target_doc.addObject("Part::Feature", "Deck_CabinTrunk")
     obj.Shape = rect_solid
@@ -574,7 +580,6 @@ def _build_windshield(
     """Build the inclined windshield face (FR-007)."""
     import math
 
-    import FreeCAD
     import Part
 
     hp = hull.parameters
@@ -586,17 +591,17 @@ def _build_windshield(
     aft_offset = parameters.cabin_trunk_height * math.tan(rake_rad)
 
     pts = [
-        FreeCAD.Vector(cabin_fwd_x, -half_w, deck_top_z),
-        FreeCAD.Vector(cabin_fwd_x, half_w, deck_top_z),
-        FreeCAD.Vector(cabin_fwd_x + aft_offset, half_w, cabin_top_z),
-        FreeCAD.Vector(cabin_fwd_x + aft_offset, -half_w, cabin_top_z),
-        FreeCAD.Vector(cabin_fwd_x, -half_w, deck_top_z),
+        _vec_m(cabin_fwd_x, -half_w, deck_top_z),
+        _vec_m(cabin_fwd_x, half_w, deck_top_z),
+        _vec_m(cabin_fwd_x + aft_offset, half_w, cabin_top_z),
+        _vec_m(cabin_fwd_x + aft_offset, -half_w, cabin_top_z),
+        _vec_m(cabin_fwd_x, -half_w, deck_top_z),
     ]
     edges = [Part.LineSegment(pts[i], pts[i + 1]).toShape() for i in range(4)]
     wire = Part.Wire(edges)
     face = Part.Face(wire)
     # Extrude along its normal (small thickness) to give the windshield substance.
-    windshield_solid = face.extrude(FreeCAD.Vector(-0.005, 0, 0.005))
+    windshield_solid = face.extrude(_vec_m(-0.005, 0, 0.005))
 
     obj = target_doc.addObject("Part::Feature", "Deck_Windshield")
     obj.Shape = windshield_solid
@@ -616,7 +621,6 @@ def _build_hardtop(
     added: list[Any],
 ) -> Hardtop:
     """Build the hardtop slab (FR-007)."""
-    import FreeCAD
     import Part
 
     hp = hull.parameters
@@ -636,9 +640,9 @@ def _build_hardtop(
 
     slab_thickness = 0.05  # internal constant for the slab solidness
 
-    rect = Part.makePlane(parameters.hardtop_length, hardtop_width)
-    solid = rect.extrude(FreeCAD.Vector(0, 0, slab_thickness))
-    solid.translate(FreeCAD.Vector(hardtop_fwd_x, -hardtop_width / 2.0, hardtop_z))
+    rect = Part.makePlane(parameters.hardtop_length * _MM_PER_M, hardtop_width * _MM_PER_M)
+    solid = rect.extrude(_vec_m(0, 0, slab_thickness))
+    solid.translate(_vec_m(hardtop_fwd_x, -hardtop_width / 2.0, hardtop_z))
     _ = hardtop_aft_x  # used for documentation; aft pillar X derived from this elsewhere
 
     obj = target_doc.addObject("Part::Feature", "Deck_Hardtop")
@@ -670,7 +674,6 @@ def _build_hardtop_pillars(
     added: list[Any],
 ) -> HardtopPillars:
     """Build two aft hardtop support pillars (FR-007, FR-009)."""
-    import FreeCAD
     import Part
 
     hp = hull.parameters
@@ -687,10 +690,14 @@ def _build_hardtop_pillars(
     pillar_height = hardtop_z - deck_top_z
 
     pillar_port = Part.makeCylinder(
-        radius, pillar_height, FreeCAD.Vector(hardtop_aft_x, pillar_y_offset, deck_top_z)
+        radius * _MM_PER_M,
+        pillar_height * _MM_PER_M,
+        _vec_m(hardtop_aft_x, pillar_y_offset, deck_top_z),
     )
     pillar_starboard = Part.makeCylinder(
-        radius, pillar_height, FreeCAD.Vector(hardtop_aft_x, -pillar_y_offset, deck_top_z)
+        radius * _MM_PER_M,
+        pillar_height * _MM_PER_M,
+        _vec_m(hardtop_aft_x, -pillar_y_offset, deck_top_z),
     )
     compound = Part.makeCompound([pillar_port, pillar_starboard])
 
@@ -727,8 +734,8 @@ def _build_railings(
     rail_pipe_radius = 0.012  # 25 mm OD internal constant
 
     samples = _sample_hull_sheer(hull)
-    points_port = [FreeCAD.Vector(x, y, rail_z) for x, y, _z in samples]
-    points_starboard = [FreeCAD.Vector(x, -y, rail_z) for x, y, _z in reversed(samples)]
+    points_port = [_vec_m(x, y, rail_z) for x, y, _z in samples]
+    points_starboard = [_vec_m(x, -y, rail_z) for x, y, _z in reversed(samples)]
     loop_pts = points_port + points_starboard[1:-1] + [points_port[0]]
 
     edges = [
@@ -740,7 +747,9 @@ def _build_railings(
     # path direction (approximated by Z-axis sweep — simpler and works for
     # a deck that's mostly flat in Z).
     profile_center = loop_pts[0]
-    profile_circle = Part.Circle(profile_center, FreeCAD.Vector(1, 0, 0), rail_pipe_radius)
+    profile_circle = Part.Circle(
+        profile_center, FreeCAD.Vector(1, 0, 0), rail_pipe_radius * _MM_PER_M
+    )
     profile_wire = Part.Wire([profile_circle.toShape()])
     rail_solid = Part.makeSweepSurface(wire, profile_wire)
     _ = rail_solid  # FreeCAD's sweep API varies; fall back to a simple polyline if needed
@@ -749,7 +758,7 @@ def _build_railings(
     # the wire upward (this produces a "rail height ribbon" approximation
     # adequate for the v0.3.0-alpha bbox / parametricity tests).
     rail_face = Part.Face(wire) if wire.isClosed() else None
-    rail_body = rail_face.extrude(FreeCAD.Vector(0, 0, 0.01)) if rail_face is not None else wire
+    rail_body = rail_face.extrude(_vec_m(0, 0, 0.01)) if rail_face is not None else wire
 
     obj = target_doc.addObject("Part::Feature", "Deck_Railings")
     obj.Shape = rail_body

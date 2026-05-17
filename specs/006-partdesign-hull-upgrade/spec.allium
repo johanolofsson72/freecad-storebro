@@ -1,0 +1,364 @@
+-- allium: 3
+--
+-- PartDesign hull upgrade — formal spec. Derived from
+-- specs/006-partdesign-hull-upgrade/spec.md after /speckit-clarify (3 auto-picked
+-- clarifications applied). Full pipeline track per .claude/rules/specs.md.
+--
+-- BLOCKING for v1.0.0 tag. The legacy v0.1.0-alpha hull does not construct on
+-- FreeCAD 1.1.1 because Part::Loft / Part::Mirroring / Part::MultiFuse cannot
+-- be added to a PartDesign::Body container (ValueError: Body: object is not
+-- allowed). This spec rebuilds the hull entirely inside the PartDesign
+-- workbench: 5 sketches on Body-local datum planes, one AdditiveLoft for the
+-- half-hull, one Mirrored across the XZ plane for the full closed solid.
+--
+-- Constitutional principles governing this module:
+--   I.   Parametric Everything       (every dimension stays a named parameter)
+--   II.  Reproducibility             (byte-identical .FCStd across runs)
+--   III. FreeCAD-Idiomatic           (PartDesign Body + sketches; no raw mesh)
+--   IV.  Reference Fidelity          (±1% LOA/beam vs RC34 1972 reference)
+--   V.   Test-Gated Releases         (86 currently-failing geometry tests pass)
+--   VII. FreeCAD Version Discipline  (supported range unchanged: >=1.1, <2.0)
+
+-- ===== Enums =====
+
+enum StationName { transom | aft | amidships | fwd | stem }
+
+-- ===== External entities (live in FreeCAD's object model + spec 001 module) =====
+-- FreeCAD* types come from the FreeCAD 1.1 Python API.
+-- HullParameters, Hull, HullConstructionError come from src/storebro/hull.py
+-- (existing public surface of spec 001, preserved unchanged per FR-005).
+
+external entity FreeCADDocument {
+    name: String
+}
+
+external entity FreeCADShape {
+    volume: Decimal
+    face_count: Integer
+    edge_count: Integer
+    is_closed: Boolean
+    is_manifold: Boolean
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+    patch: Integer
+}
+
+external entity HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    freeboard: Decimal
+    deadrise_amidships: Decimal
+    sheer_height_aft: Decimal
+    sheer_height_fwd: Decimal
+    transom_angle: Decimal
+}
+
+external entity Hull {
+    body: HullBody
+    parameters: HullParameters
+    document: FreeCADDocument
+    label: String
+    build_duration_seconds: Decimal
+}
+
+external entity HullConstructionError {
+    parameters: HullParameters?
+    underlying: String?
+    detected_version: FreeCADVersion?
+    supported_range: String?
+}
+
+-- ===== Internal entities (the PartDesign feature graph) =====
+
+entity HullBody {
+    document: FreeCADDocument
+    label: String
+    tip: MirrorFeature
+
+    -- Named informational properties (Q2 clarify: informational, not expression-bound)
+    loa_property: Decimal
+    beam_max_property: Decimal
+    draft_property: Decimal
+    freeboard_property: Decimal
+    deadrise_amidships_property: Decimal
+    sheer_height_aft_property: Decimal
+    sheer_height_fwd_property: Decimal
+    transom_angle_property: Decimal
+
+    sketches: StationSketch with body = this
+    datum_planes: DatumPlane with body = this
+    additive_loft: AdditiveLoftFeature with body = this
+    mirror: MirrorFeature with body = this
+
+    invariant ExactlyFiveSketches { this.sketches.count = 5 }
+    invariant ExactlyFiveDatumPlanes { this.datum_planes.count = 5 }
+    invariant SingleAdditiveLoft { exists this.additive_loft }
+    invariant SingleMirror { exists this.mirror }
+}
+
+entity DatumPlane {
+    body: HullBody
+    station: StationName
+    x_offset: Decimal
+    -- Q1 clarify: attached to Body.Origin.YZ_Plane (Body-local frame), not the
+    -- document's global XZ. The x_offset places the plane at the station's
+    -- canonical X coordinate relative to the Body's local origin.
+
+    invariant AttachedToBodyLocalOrigin { this.body != null }
+}
+
+entity StationSketch {
+    body: HullBody
+    station: StationName
+    datum_plane: DatumPlane
+    profile_curves_match_v01_alpha: Boolean
+
+    invariant SketchOnOwnDatumPlane { this.datum_plane.body = this.body }
+    invariant ProfileFromCanonicalEquations { this.profile_curves_match_v01_alpha = true }
+}
+
+entity AdditiveLoftFeature {
+    body: HullBody
+    profile_sketches: Set<StationSketch>
+    half_hull_shape: FreeCADShape
+
+    invariant ConsumesFiveProfilesInOrder { this.profile_sketches.count = 5 }
+    invariant HalfHullIsManifold { this.half_hull_shape.is_manifold = true }
+}
+
+entity MirrorFeature {
+    body: HullBody
+    source: AdditiveLoftFeature
+    -- Mirror plane is Body.Origin.XZ_Plane (the centerline plane)
+    full_hull_shape: FreeCADShape
+
+    invariant ReflectsAdditiveLoft { this.source.body = this.body }
+    invariant FullHullIsClosedManifold {
+        this.full_hull_shape.is_closed = true
+        and this.full_hull_shape.is_manifold = true
+        and this.full_hull_shape.volume > 0
+    }
+}
+
+-- ===== Config =====
+
+config {
+    station_count: Integer = 5
+    hull_build_budget_seconds: Decimal = 30.0
+    reference_fidelity_tolerance_percent: Decimal = 1.0
+    supported_freecad_min_major: Integer = 1
+    supported_freecad_min_minor: Integer = 1
+    supported_freecad_max_exclusive_major: Integer = 2
+    currently_failing_geometry_tests: Integer = 86
+}
+
+-- ===== Rules =====
+
+-- FR-001 + FR-002: top-level build_hull dispatches the PartDesign construction
+rule BuildHull {
+    when: BuildHullCalled(parameters, document_arg, name_arg)
+    requires:
+        parameters != null
+        FreeCADVersion.current.supported = true
+    ensures:
+        let doc = FreeCADDocument.resolved_from(document_arg)
+        let body = HullBody.created(document: doc, label_from: name_arg)
+        body.loa_property = parameters.loa
+        body.beam_max_property = parameters.beam_max
+        body.draft_property = parameters.draft
+        body.freeboard_property = parameters.freeboard
+        body.deadrise_amidships_property = parameters.deadrise_amidships
+        body.sheer_height_aft_property = parameters.sheer_height_aft
+        body.sheer_height_fwd_property = parameters.sheer_height_fwd
+        body.transom_angle_property = parameters.transom_angle
+        ConstructPartDesignFeatureGraph(body, parameters)
+        Hull.created(
+            body: body,
+            parameters: parameters,
+            document: doc,
+            label: body.label,
+            build_duration_seconds: BuildTimer.elapsed
+        )
+}
+
+-- FR-002 + FR-003: feature-graph construction in canonical order
+rule ConstructPartDesignFeatureGraph {
+    when: ConstructPartDesignFeatureGraph(body, parameters)
+    requires:
+        body != null
+        parameters != null
+    ensures:
+        for station in {transom, aft, amidships, fwd, stem}:
+            let datum = DatumPlane.created(body: body, station: station)
+            let sketch = StationSketch.created(
+                body: body,
+                station: station,
+                datum_plane: datum
+            )
+        let loft = AdditiveLoftFeature.created(
+            body: body,
+            profile_sketches: body.sketches
+        )
+        let mirror = MirrorFeature.created(body: body, source: loft)
+        body.tip = mirror
+        FreeCADDocument.recomputed(body.document)
+}
+
+-- FR-001 + FR-011: reject unsupported FreeCAD version BEFORE any addObject call
+rule RejectUnsupportedFreeCAD {
+    when: BuildHullCalled(parameters, document_arg, name_arg)
+    requires: FreeCADVersion.current.supported = false
+    ensures:
+        HullConstructionError.raised(
+            parameters: parameters,
+            detected_version: FreeCADVersion.current,
+            supported_range: ">=1.1, <2.0"
+        )
+}
+
+-- FR-012: rollback on construction failure (Q3 clarify: fail-fast)
+rule RollbackOnConstructionFailure {
+    when: ConstructionExceptionRaised(body, exc)
+    ensures:
+        for obj in body.added_document_objects:
+            FreeCADDocument.removed(body.document, obj)
+        HullConstructionError.raised(
+            parameters: body.parameters,
+            underlying: exc.message
+        )
+}
+
+-- Q3 clarify: non-manifold loft fails fast, no recovery
+rule RaiseOnNonManifoldLoft {
+    when: AdditiveLoftFeature.recompute_completed(loft)
+    requires: loft.half_hull_shape.is_manifold = false
+    ensures:
+        HullConstructionError.raised(
+            parameters: loft.body.parameters,
+            underlying: "PartDesign::AdditiveLoft produced non-manifold result"
+        )
+}
+
+-- FR-013: Body.Tip points at the mirror feature
+rule SetBodyTipToMirror {
+    when: ConstructPartDesignFeatureGraph(body, parameters)
+    ensures: body.tip = body.mirror
+}
+
+-- ===== Global invariants =====
+
+-- FR-001 (the headline invariant): no legacy Part-workbench features inside a Body
+invariant NoLegacyPartFeaturesInsideBody {
+    for body in HullBody:
+        not exists obj in body.children where
+            obj.type_id = "Part::Loft"
+            or obj.type_id = "Part::Mirroring"
+            or obj.type_id = "Part::MultiFuse"
+            or obj.type_id = "Part::Feature"
+}
+
+-- FR-002 + FR-003: every station has a dedicated sketch + datum, no orphans
+invariant FiveStationsFiveSketchesFiveDatums {
+    for body in HullBody:
+        body.sketches.count = 5
+        and body.datum_planes.count = 5
+        and body.sketches.all(s => exists s.datum_plane)
+}
+
+-- FR-007: hull shape is always a closed manifold solid with positive volume
+invariant HullShapeIsManifold {
+    for body in HullBody:
+        body.tip.full_hull_shape.is_closed = true
+        and body.tip.full_hull_shape.is_manifold = true
+        and body.tip.full_hull_shape.volume > 0
+}
+
+-- FR-010: no raw mesh manipulation anywhere in storebro.hull
+invariant NoMeshOperationsInHullModule {
+    not Module.uses("storebro.hull", "Mesh.Mesh")
+    and not Module.uses("storebro.hull", "Mesh.MeshObject")
+}
+
+-- FR-008 + SC-004: byte-deterministic across invocations (delegates to export)
+-- Single-variable formulation: each hull-derived artifact equals the canonical
+-- digest for its parameters, so two artifacts with same params equal each other.
+invariant BuildHullIsByteDeterministic {
+    for h in Hull:
+        h.body.tip.full_hull_shape.volume = HullShape.canonical_volume_for(h.parameters)
+        and h.body.tip.full_hull_shape.face_count = HullShape.canonical_face_count_for(h.parameters)
+        and h.body.tip.full_hull_shape.edge_count = HullShape.canonical_edge_count_for(h.parameters)
+}
+
+-- FR-005: public Hull dataclass shape is unchanged from v0.1.0-alpha
+invariant PublicHullDataclassShapePreserved {
+    Module.public_fields("Hull") = {
+        "body",
+        "parameters",
+        "document",
+        "label",
+        "build_duration_seconds"
+    }
+}
+
+-- FR-006: eight named informational properties on the Body, same as v0.1.0-alpha
+invariant EightNamedPropertiesOnBody {
+    for body in HullBody:
+        body.loa_property != null
+        and body.beam_max_property != null
+        and body.draft_property != null
+        and body.freeboard_property != null
+        and body.deadrise_amidships_property != null
+        and body.sheer_height_aft_property != null
+        and body.sheer_height_fwd_property != null
+        and body.transom_angle_property != null
+}
+
+-- FR-013: Body.Tip always set to the mirror feature
+invariant BodyTipIsMirror {
+    for body in HullBody:
+        body.tip = body.mirror
+}
+
+-- FR-014: principal dimensions match reference within ±1%
+invariant ReferenceFidelityWithinOnePercent {
+    for h in Hull:
+        let shape_loa = h.body.tip.full_hull_shape.bbox_x_extent
+        let shape_beam = h.body.tip.full_hull_shape.bbox_y_extent
+        Decimal.relative_diff(shape_loa, h.parameters.loa) < 0.01
+        and Decimal.relative_diff(shape_beam, h.parameters.beam_max) < 0.01
+}
+
+-- SC-007: feature graph remains GUI-editable
+invariant SketchesAreNotLocked {
+    for body in HullBody:
+        body.sketches.all(s => s.editable_in_gui = true)
+}
+
+-- ===== Deferred / future-work markers =====
+
+deferred HullBody.expression_engine_bindings
+-- See spec.md FR-006 + clarification Q2 for governing rationale.
+-- Q2 clarify: for v1.0.0 the eight named properties (Loa, BeamMax, etc.) are
+-- informational only. Bidirectional Body-property → sketch-constraint binding
+-- via FreeCAD's expression engine is deferred to a future spec. When that
+-- ships, editing `body.Loa = 11.0` in the GUI would propagate to all 5
+-- station sketches and recompute the hull. v1.0.0 keeps sketches as the
+-- source of truth.
+
+deferred HullModule.partdesign_pad_for_keel
+-- See spec.md Assumptions section for v1.1+ scope rationale.
+-- The current AdditiveLoft + Mirror is the minimum-viable PartDesign feature
+-- graph. A v1.1+ enhancement could add a Pad for the keel longitudinal, an
+-- AdditiveLoft for the deck-line cap, or pockets for internal frames. Out of
+-- scope for the upgrade spec — those are net-new features, not refactors.
+
+deferred HullModule.adaptive_station_spacing
+-- See spec.md Edge Cases section for v1.1+ scope rationale (Q3 clarify: fail-fast).
+-- For extreme parameter combinations the 5 fixed station positions may
+-- collapse (e.g., LOA=4.0 m with default spacing). A v1.1+ enhancement
+-- could adaptively re-space the stations. v1.0.0 raises HullConstructionError
+-- on the offending combination (Q3 clarify: fail-fast).

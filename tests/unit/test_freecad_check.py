@@ -107,8 +107,27 @@ class TestCaching:
 
 
 class TestImportFailure:
-    def test_missing_freecad_raises_construction_error(self) -> None:
+    def test_missing_freecad_raises_construction_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When FreeCAD cannot be imported, ensure_supported_freecad raises
+        HullConstructionError with detected_version=None.
+
+        Tests the import-failure path explicitly via monkeypatch — works whether
+        or not a real FreeCAD is on the host's PYTHONPATH.
+        """
         _remove_fake_freecad()
+        _freecad_check._reset_cache_for_tests()
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "FreeCAD":
+                raise ImportError("simulated missing FreeCAD for test")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
         with pytest.raises(HullConstructionError) as exc_info:
             _freecad_check.ensure_supported_freecad()
         assert exc_info.value.detected_version is None

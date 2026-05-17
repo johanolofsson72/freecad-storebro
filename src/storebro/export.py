@@ -295,24 +295,31 @@ def _shape_type_rank(shape_type: str) -> int:
 
 
 def _sorted_subshapes(shape: Any) -> Any:
-    """Return a Shape with its subshapes sorted by centroid lex order recursively.
+    """Return a Shape with its Compound-level subshapes sorted by centroid.
 
     Centroid-based sort is invariant under FreeCAD-internal element reshuffling
     and stable across the supported FreeCAD version range (FR-019, OQ3
     resolution: applied recursively into Compound children).
 
-    The implementation builds a sorted Compound. For non-Compound shapes the
-    original is returned unchanged (their internal topology is already
-    canonical in OpenCASCADE).
+    The implementation builds a sorted Compound from Compound inputs only.
+    For Solid / Shell / Face / Edge / Vertex shapes the original is returned
+    unchanged — their internal topology is already canonical in OpenCASCADE,
+    and CenterOfMass is not defined on Vertex / Edge subshapes so recursing
+    deeper would raise AttributeError.
     """
     import Part
+
+    if getattr(shape, "ShapeType", "") != "Compound":
+        return shape
 
     sub_shapes = list(getattr(shape, "SubShapes", []) or [])
     if not sub_shapes:
         return shape
 
     def _key(s: Any) -> tuple[float, float, float, int]:
-        com = s.CenterOfMass
+        com = s.CenterOfMass if hasattr(s, "CenterOfMass") else None
+        if com is None:
+            return (0.0, 0.0, 0.0, _shape_type_rank(s.ShapeType))
         return (com.x, com.y, com.z, _shape_type_rank(s.ShapeType))
 
     sub_shapes.sort(key=_key)
@@ -324,13 +331,25 @@ def _sorted_subshapes(shape: Any) -> Any:
 # STEP helpers (research.md R1, FR-017, FR-018)
 # ---------------------------------------------------------------------------
 
-_STEP_FILE_NAME_RE = re.compile(rb"^FILE_NAME\s*\([^)]*\)\s*;", re.MULTILINE)
-_STEP_FILE_DESCRIPTION_RE = re.compile(rb"^FILE_DESCRIPTION\s*\([^)]*\)\s*;", re.MULTILINE)
+# FreeCAD's STEP writer emits FILE_NAME and FILE_DESCRIPTION as multi-line
+# entries with nested parens (author/organization tuples). The naive
+# `[^)]*` pattern stops at the first inner `)`; switch to a non-greedy
+# DOTALL match that consumes everything up to the closing `);`.
+_STEP_FILE_NAME_RE = re.compile(rb"^FILE_NAME\s*\(.*?\)\s*;", re.MULTILINE | re.DOTALL)
+_STEP_FILE_DESCRIPTION_RE = re.compile(
+    rb"^FILE_DESCRIPTION\s*\(.*?\)\s*;", re.MULTILINE | re.DOTALL
+)
 _STEP_FIXED_FILE_NAME = (
     b"FILE_NAME('','1980-01-01T00:00:00',('freecad-storebro'),('freecad-storebro'),"
     b"'freecad-storebro','freecad-storebro','');"
 )
 _STEP_FIXED_FILE_DESCRIPTION = b"FILE_DESCRIPTION(('freecad-storebro export'),'2;1');"
+
+# OpenCASCADE emits a per-session export counter in the PRODUCT entity
+# (`'Open CASCADE STEP translator 7.8 1'`, `'... 2'`, ...). Scrub it to a
+# fixed value so two consecutive exports produce byte-identical bytes.
+_STEP_PRODUCT_COUNTER_RE = re.compile(rb"'Open CASCADE STEP translator [\d.]+ \d+'")
+_STEP_FIXED_PRODUCT_NAME = b"'freecad-storebro'"
 
 
 def _set_step_schema_to_ap214() -> None:
@@ -350,6 +369,7 @@ def _canonicalize_step_header(raw_bytes: bytes) -> bytes:
     """Scrub the STEP HEADER section to fix timestamps + originator metadata."""
     body = _STEP_FILE_NAME_RE.sub(_STEP_FIXED_FILE_NAME, raw_bytes, count=1)
     body = _STEP_FILE_DESCRIPTION_RE.sub(_STEP_FIXED_FILE_DESCRIPTION, body, count=1)
+    body = _STEP_PRODUCT_COUNTER_RE.sub(_STEP_FIXED_PRODUCT_NAME, body)
     return body.replace(b"\r\n", b"\n")
 
 
@@ -373,8 +393,40 @@ def _canonicalize_brep_header(raw_bytes: bytes) -> bytes:
 _FCSTD_FIXED_DATE = "1980-01-01T00:00:00Z"
 _FCSTD_FIXED_USER = "freecad-storebro"
 _FCSTD_FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+_FCSTD_FIXED_UUID = "00000000-0000-0000-0000-000000000000"
+_FCSTD_FIXED_TRANSIENT_PATH = "freecad-storebro.FCStd"
 _FCSTD_METADATA_FIELDS = frozenset(
     {"CreationDate", "LastModifiedDate", "CreatedBy", "LastModifiedBy"}
+)
+# Regex over the .FCStd Document.xml text catches:
+#   • Random temp filenames FreeCAD records as String values during saveAs
+#     (e.g. ".boat.FCStd.g651pps0" — the .tmp middle-suffix path).
+#   • Per-process Object ID counters (FreeCAD increments across documents,
+#     not per-document, so two consecutive exports produce different IDs).
+_FCSTD_TRANSIENT_PATH_RE = re.compile(r'(<String\s+value=")\.[^"]+?\.FCStd\.[^"]+(")')
+_FCSTD_OBJECT_ID_RE = re.compile(r'(\sid=")(\d+)(")')
+# ISO 8601 timestamp String values (e.g. `<String value="2026-05-17T18:15:01+02:00" />`)
+# leaked into Document.xml by various FreeCAD Property writers.
+_FCSTD_ISO_TIMESTAMP_RE = re.compile(
+    r'(<String\s+value=")\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+\-]\d{2}:\d{2}(")'
+)
+# Per-session hex tag counters inside Shape.Map.txt / StringHasher.Table.txt
+# entries (`:H57c:7,E`, `:H1310,V`, `1 0 159 3068`). FreeCAD increments
+# these globally across the process. Normalize by remapping each unique
+# tag to a stable sequential index in document order. Two forms appear:
+#   `:H<hex>` followed by `,` or `:` — the topo-naming tag in element refs
+#   ` <decimal> ` mid-line in StringHasher rows — the session counter (skip;
+#     handled by HashRow normalization below)
+# Match `:H<hex>` optionally followed by `:<hex>` (subdiv suffix), bounded by
+# `,` or `;` (element-type or tag-separator). Both parts derive from
+# session-global counters; scrub the composite token together.
+_FCSTD_HEX_TAG_RE = re.compile(rb":H([0-9a-fA-F]+(?::[0-9a-fA-F]+)?)(?=[,;])")
+# StringHasher rows have a decimal counter at column 4 that increments per
+# session — `1 0 159 3068 1 ;:Hbfb,E;:H5:8,E 0` vs `1 0 159 857 1 ...`.
+# Normalize the counter column to 0 to make exports deterministic.
+_FCSTD_HASH_ROW_COUNTER_RE = re.compile(
+    rb"^(\d+\s+\d+\s+\d+\s+)(\d+)(\s+\d+\s+;:H)",
+    re.MULTILINE,
 )
 
 
@@ -396,7 +448,9 @@ def _canonical_xml_serialize(root: ET.Element) -> bytes:
 
 
 def _scrub_document_xml(xml_bytes: bytes) -> bytes:
-    """Scrub timestamps + user metadata from an FCStd Document.xml entry."""
+    """Scrub timestamps, user metadata, UUIDs, transient paths, and Object
+    IDs from an FCStd Document.xml entry so byte-determinism holds across
+    consecutive exports."""
     text = xml_bytes.decode("utf-8")
     root = ET.fromstring(text)
 
@@ -412,8 +466,50 @@ def _scrub_document_xml(xml_bytes: bytes) -> bytes:
                     elem.set(attr_name, _FCSTD_FIXED_DATE)
                 else:
                     elem.set(attr_name, _FCSTD_FIXED_USER)
+        # Scrub <Uuid value="..."> elements to a fixed nil UUID.
+        if elem.tag == "Uuid" and "value" in elem.attrib:
+            elem.set("value", _FCSTD_FIXED_UUID)
 
-    return _canonical_xml_serialize(root)
+    serialized = _canonical_xml_serialize(root)
+    text = serialized.decode("utf-8")
+    # Scrub transient FCStd save paths recorded as String values.
+    # Use \g<N> unambiguous backref form (plain \1 collides with following
+    # digits, e.g. \1 + "1980..." would parse as group 11).
+    text = _FCSTD_TRANSIENT_PATH_RE.sub(rf"\g<1>{_FCSTD_FIXED_TRANSIENT_PATH}\g<2>", text)
+    # Scrub ISO 8601 timestamp String values leaked into the doc.
+    text = _FCSTD_ISO_TIMESTAMP_RE.sub(rf"\g<1>{_FCSTD_FIXED_DATE}\g<2>", text)
+    # Renumber every `id="N"` attribute sequentially in document order so
+    # cross-document FreeCAD ID counters don't break determinism. References
+    # in the XML are by object NAME, not numeric ID, so renumbering is safe.
+    id_counter = iter(range(10000))
+
+    def _renumber_id(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{next(id_counter)}{match.group(3)}"
+
+    text = _FCSTD_OBJECT_ID_RE.sub(_renumber_id, text)
+    return text.encode("utf-8")
+
+
+def _scrub_hex_tags(content: bytes) -> bytes:
+    """Normalize per-session hex tag counters in Shape.Map.txt files.
+
+    FreeCAD's Topological Naming system stamps each element with a hex tag
+    (`:H57c:`, `:H1310:`, etc.) that derives from a global per-process
+    counter. Two consecutive exports produce different tags even for
+    identical geometry. Remap each unique tag to a stable sequential index
+    in document order so byte-identical bytes hold across runs.
+    """
+    seen: dict[bytes, bytes] = {}
+
+    def _renumber(match: re.Match[bytes]) -> bytes:
+        tag = match.group(1)
+        if tag not in seen:
+            seen[tag] = f"{len(seen):x}".encode()
+        return b":H" + seen[tag]
+
+    content = _FCSTD_HEX_TAG_RE.sub(_renumber, content)
+    content = _FCSTD_HASH_ROW_COUNTER_RE.sub(rb"\g<1>0\g<3>", content)
+    return content
 
 
 def _scrub_fcstd_zip(raw_zip_bytes: bytes) -> bytes:
@@ -425,6 +521,8 @@ def _scrub_fcstd_zip(raw_zip_bytes: bytes) -> bytes:
             data = zin.read(info)
             if name == "Document.xml":
                 data = _scrub_document_xml(data)
+            elif name.endswith(".Map.txt") or name == "StringHasher.Table.txt":
+                data = _scrub_hex_tags(data)
             entries.append((name, data))
 
     entries.sort(key=lambda e: e[0])
@@ -593,7 +691,7 @@ def export_step(
     tmp_fd, tmp_name = tempfile.mkstemp(
         dir=resolved.parent,
         prefix=f".{resolved.name}.",
-        suffix=".step.tmp",
+        suffix=".step",
     )
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
@@ -729,7 +827,7 @@ def export_stl(
     tmp_fd, tmp_name = tempfile.mkstemp(
         dir=resolved.parent,
         prefix=f".{resolved.name}.",
-        suffix=".stl.tmp",
+        suffix=".stl",
     )
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
@@ -802,7 +900,7 @@ def export_fcstd(
     tmp_fd, tmp_name = tempfile.mkstemp(
         dir=resolved.parent,
         prefix=f".{resolved.name}.",
-        suffix=".FCStd.tmp",
+        suffix=".FCStd",
     )
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)

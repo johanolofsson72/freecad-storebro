@@ -215,7 +215,14 @@ def _run_build(args: argparse.Namespace) -> int:
     """Compose hull + deck + interior + export per FR-004 + FR-006."""
     overwrite = not args.no_overwrite
 
-    hull = build_hull()
+    # Always build in a fresh FreeCAD document so two consecutive CLI
+    # invocations produce byte-identical output (SC-005 / constitution II).
+    # Without this the second `storebro build` reuses the first's active
+    # document and ends up emitting both hulls in the same FCStd.
+    import FreeCAD
+
+    fresh_doc = FreeCAD.newDocument("storebro_build")
+    hull = build_hull(document=fresh_doc)
     deck = build_deck(hull)
     build_interior(hull, deck, layout=args.layout)
 
