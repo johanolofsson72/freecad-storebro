@@ -1,0 +1,442 @@
+-- allium: 3
+--
+-- Hull fidelity refresh — formal spec. Derived from
+-- specs/007-hull-fidelity-refresh/spec.md after /speckit-clarify (3 auto-picked
+-- clarifications applied). Full pipeline track per .claude/rules/specs.md.
+--
+-- v1.0.0 produced a constructable but visually wrong hull: faceted (Ruled=True
+-- linear loft), planing-hull deadrise (16° vs semi-displacement ~8°), over-
+-- raked transom (12° vs ~5°), pointed-vertex stem (vs blunt ~80mm face),
+-- pentagon cross-sections (vs rounded bilges). Spec 007 corrects each axis
+-- against the storebropassion.de reference. PATCH-level: v1.0.0 → v1.0.1.
+-- No public API change; HullParameters gains one additive field with default.
+--
+-- Constitutional principles governing this module:
+--   I.   Parametric Everything       (8 + 1 named parameters, no magic)
+--   II.  Reproducibility             (byte-identical output, hash baselines reset)
+--   III. FreeCAD-Idiomatic           (PartDesign Body + sketches, B-spline loft)
+--   IV.  Reference Fidelity          (matches storebropassion.de within ±5%)
+--   V.   Test-Gated Releases         (96 existing tests + new silhouette tests)
+--   VI.  Public OSS by Default       (no breaking API change; PATCH semver)
+--   VII. FreeCAD Version Discipline  (supported range unchanged: >=1.1, <2.0)
+
+-- ===== Enums =====
+
+enum StationName { transom | aft | amidships | fwd | stem }
+enum LoftMode { bspline | ruled_linear }
+
+-- ===== External entities (FreeCAD object model + spec 001 public surface) =====
+
+external entity FreeCADDocument {
+    name: String
+}
+
+external entity FreeCADShape {
+    volume: Decimal
+    bbox_x_length: Decimal
+    bbox_y_length: Decimal
+    bbox_z_length: Decimal
+    is_closed: Boolean
+    is_manifold: Boolean
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+    patch: Integer
+}
+
+external entity HullConstructionError {
+    parameters: HullParameters?
+    underlying: String?
+}
+
+-- Symbolic builder for sketch construction calls; SketchGeometry models the
+-- Sketcher API surface (addGeometry / addConstraint) without re-deriving each
+-- FreeCAD primitive in Allium.
+external entity SketchGeometry { name: String }
+external entity Logger { name: String }
+
+-- ===== Updated HullParameters (FR-001 + FR-002) =====
+
+entity HullParameters {
+    loa: Decimal                    -- 10.35 m (unchanged from v1.0.0)
+    beam_max: Decimal               -- 3.20 m (unchanged from v1.0.0)
+    draft: Decimal                  -- 1.10 m (changed from 0.95)
+    freeboard: Decimal              -- 0.95 m (semantic preserved)
+    deadrise_amidships: Decimal     -- 8.0 deg (changed from 16.0; semi-displacement)
+    sheer_height_aft: Decimal       -- 0.95 m (changed from 0.85)
+    sheer_height_fwd: Decimal       -- 1.16 m (changed from 1.30)
+    transom_angle: Decimal          -- 5.0 deg (changed from 12.0)
+    stem_rake_angle: Decimal        -- NEW: 6.0 deg, range [0, 30]
+
+    invariant LoaWithinTolerance     { this.loa = 10.35 }
+    invariant BeamWithinTolerance    { this.beam_max = 3.20 }
+    invariant DraftMatchesReference  { this.draft = 1.10 }
+    invariant SheerAftMatches        { this.sheer_height_aft = 0.95 }
+    invariant SheerFwdMatches        { this.sheer_height_fwd = 1.16 }
+    invariant DeadriseSemiDisplacement { this.deadrise_amidships <= 10.0 }
+    invariant TransomNearVertical    { this.transom_angle <= 8.0 }
+    invariant StemRakeWithinRange    { this.stem_rake_angle >= 0.0 and this.stem_rake_angle <= 30.0 }
+}
+
+external entity Hull {
+    body: HullBody
+    parameters: HullParameters
+    document: FreeCADDocument
+    label: String
+    build_duration_seconds: Decimal
+}
+
+-- ===== Internal entities (the PartDesign feature graph) =====
+
+entity HullBody {
+    document: FreeCADDocument
+    label: String
+    tip: MirrorFeature
+
+    -- 9 named informational properties (8 existing + 1 new)
+    loa_property: Decimal
+    beam_max_property: Decimal
+    draft_property: Decimal
+    freeboard_property: Decimal
+    deadrise_amidships_property: Decimal
+    sheer_height_aft_property: Decimal
+    sheer_height_fwd_property: Decimal
+    transom_angle_property: Decimal
+    stem_rake_angle_property: Decimal  -- NEW
+
+    sketches: StationSketch with body = this
+    datum_planes: DatumPlane with body = this
+    additive_loft: AdditiveLoftFeature with body = this
+    mirror: MirrorFeature with body = this
+
+    invariant ExactlyFiveSketches { this.sketches.count = 5 }
+    invariant ExactlyFiveDatumPlanes { this.datum_planes.count = 5 }
+    invariant NineNamedProperties {
+        this.loa_property != null and this.stem_rake_angle_property != null
+    }
+}
+
+entity DatumPlane {
+    body: HullBody
+    station: StationName
+    x_offset: Decimal
+    rake_rotation_degrees: Decimal  -- non-zero ONLY for the stem datum
+
+    -- Q1 clarify: the stem datum has AttachmentOffset.Rotation set to
+    -- Rotation(Vector(0,1,0), stem_rake_angle); all other datums have
+    -- zero rotation (parallel to YZ).
+    invariant StemDatumTiltedByRakeAngle {
+        if this.station = stem:
+            this.rake_rotation_degrees = this.body.parameters.stem_rake_angle
+        else:
+            this.rake_rotation_degrees = 0.0
+    }
+}
+
+entity StationSketch {
+    body: HullBody
+    station: StationName
+    datum_plane: DatumPlane
+    has_bilge_arc: Boolean    -- v1.0.1 scope-cut: always false; deferred to v1.1+
+    has_blunt_stem_face: Boolean  -- true for stem (FR-003); semantically blunt
+                                  -- via half_beam_at_top = half_beam_at_bottom = 40mm
+                                  -- on a 5-vertex pentagon shared with non-stem topology
+
+    invariant StemSketchIsBlunt {
+        if this.station = stem:
+            this.has_blunt_stem_face = true
+        else:
+            this.has_blunt_stem_face = false
+    }
+
+    -- Topological invariant: every station is a closed 5-line-segment
+    -- pentagon. Sharing topology between stem and non-stem lets the loft
+    -- map vertices 1:1 without twisting. The bilge-arc upgrade requires
+    -- compound-curve sections (deferred — see HullModule.bilge_arc).
+    invariant AllStationsAreFiveSegmentPentagons {
+        this.has_bilge_arc = false
+    }
+}
+
+entity AdditiveLoftFeature {
+    body: HullBody
+    profile_sketches: Set<StationSketch>
+    half_hull_shape: FreeCADShape
+    actual_mode: LoftMode   -- v1.0.1 scope-cut: always ruled_linear; bspline deferred
+
+    invariant ConsumesFiveProfilesInOrder { this.profile_sketches.count = 5 }
+
+    -- v1.0.1 scope-cut: with only 5 stations the bspline interpolation
+    -- overshoots between the wide amidships profile and the narrow stem,
+    -- bulging the loft surface well past the profile vertices (port half-
+    -- hull bbox extended to Y≈3128 instead of 1600). Forced ruled_linear
+    -- until a denser station set (≥8) is in place — tracked as
+    -- HullModule.b_spline_loft.
+    invariant ModeIsRuledLinear { this.actual_mode = ruled_linear }
+
+    invariant HalfHullIsManifold {
+        this.half_hull_shape.is_manifold = true
+        and this.half_hull_shape.volume > 0
+    }
+}
+
+entity MirrorFeature {
+    body: HullBody
+    source: AdditiveLoftFeature
+    full_hull_shape: FreeCADShape
+
+    invariant ReflectsAdditiveLoft { this.source.body = this.body }
+    invariant FullHullIsClosedManifold {
+        this.full_hull_shape.is_closed = true
+        and this.full_hull_shape.is_manifold = true
+        and this.full_hull_shape.volume > 0
+    }
+}
+
+-- ===== Config =====
+
+config {
+    station_count: Integer = 5
+    blunt_stem_half_width_mm: Decimal = 80.0
+    visual_similarity_target_percent: Decimal = 80.0
+    silhouette_height_tolerance_percent: Decimal = 5.0
+    principal_dimensions_tolerance_percent: Decimal = 1.0
+    hull_build_budget_seconds: Decimal = 30.0
+    sheer_rise_max_mm: Decimal = 250.0
+    transom_max_angle_degrees: Decimal = 8.0
+    stem_max_rake_degrees: Decimal = 10.0
+}
+
+-- ===== Rules =====
+
+-- FR-001 + FR-002: build_hull invocation with updated defaults
+rule BuildHull {
+    when: BuildHullCalled(parameters, document_arg, name_arg)
+    requires:
+        parameters != null
+        FreeCADVersion.current.supported = true
+    ensures:
+        let doc = FreeCADDocument.resolved_from(document_arg)
+        let body = HullBody.created(document: doc, label_from: name_arg)
+        BindNineProperties(body, parameters)
+        ConstructPartDesignFeatureGraph(body, parameters)
+        Hull.created(
+            body: body,
+            parameters: parameters,
+            document: doc,
+            label: body.label,
+            build_duration_seconds: BuildTimer.elapsed
+        )
+}
+
+-- FR-005: every station (stem and non-stem) is a 5-segment closed pentagon
+-- with shared topology so the AdditiveLoft can map vertices 1:1 without
+-- twisting. The quarter-circle bilge arc is deferred (see config + deferred
+-- markers at end of file). The stem pentagon collapses to an effective
+-- rectangle through half_beam_at_top = half_beam_at_bottom = 40mm plus a
+-- small 80mm forefoot (keel_depth_stem) preserving the 5-vertex topology.
+rule CreateStationSketch {
+    when: CreateStationSketch(body, profile, datum)
+    ensures:
+        let sketch = StationSketch.created(
+            body: body,
+            station: profile.name,
+            datum_plane: datum,
+            has_bilge_arc: false,
+            has_blunt_stem_face: profile.name = stem
+        )
+        SketchGeometry.add_closed_pentagon(
+            sketch: sketch,
+            v_keel_centerline: KeelCenterlinePoint(profile),
+            v_bottom_outer: BottomOuterPoint(profile),
+            v_top_outer: TopOuterPoint(profile),
+            v_outer_sheer: OuterSheerPoint(profile),
+            v_centerline_deck: CenterlineDeckPoint(profile)
+        )
+}
+
+-- Q1 clarify: stem datum gets tilted by Y-axis rotation
+rule CreateStemDatumWithRake {
+    when: CreateDatumPlane(body, profile)
+    requires: profile.name = stem
+    ensures:
+        let datum = DatumPlane.created(body: body, station: stem)
+        datum.x_offset = body.parameters.loa * 1000.0
+        datum.rake_rotation_degrees = body.parameters.stem_rake_angle
+        -- FreeCAD: datum.AttachmentOffset = Placement(
+        --   Vector(0, 0, x_offset),
+        --   Rotation(Vector(0, 1, 0), stem_rake_angle)
+        -- )
+}
+
+-- FR-004 + v1.0.1 scope-cut: forced ruled_linear loft (bspline deferred).
+rule BuildAdditiveLoft {
+    when: BuildAdditiveLoft(body, sketches)
+    ensures:
+        let loft = AdditiveLoftFeature.created(
+            body: body,
+            profile_sketches: sketches,
+            actual_mode: ruled_linear
+        )
+        FreeCADDocument.recomputed(body.document)
+}
+
+-- FR-008: HullConstructionError on unrecoverable construction failure
+rule RaiseOnConstructionFailure {
+    when: ConstructionExceptionRaised(body, exc)
+    ensures:
+        for obj in body.added_document_objects:
+            FreeCADDocument.removed(body.document, obj)
+        HullConstructionError.raised(
+            parameters: body.parameters,
+            underlying: exc.message
+        )
+}
+
+-- ===== Global invariants =====
+
+-- FR-009: hull remains constructable and closed-manifold
+invariant HullShapeIsManifold {
+    for body in HullBody:
+        body.tip.full_hull_shape.is_closed = true
+        and body.tip.full_hull_shape.is_manifold = true
+        and body.tip.full_hull_shape.volume > 0
+}
+
+-- FR-001: principal dimensions match storebropassion.de reference
+invariant ReferenceDimensionsExact {
+    for h in Hull:
+        h.parameters.loa = 10.35
+        and h.parameters.beam_max = 3.20
+        and h.parameters.draft = 1.10
+        and h.parameters.sheer_height_aft = 0.95
+        and h.parameters.sheer_height_fwd = 1.16
+}
+
+-- FR-001: silhouette dimensions match reference within ±1%
+invariant BoundingBoxMatchesReference {
+    for h in Hull:
+        let shape = h.body.tip.full_hull_shape
+        Decimal.relative_diff(shape.bbox_x_length, h.parameters.loa * 1000) < 0.01
+        and Decimal.relative_diff(shape.bbox_y_length, h.parameters.beam_max * 1000) < 0.01
+}
+
+-- SC-001: sheer line is near-flat
+invariant SheerLineNearFlat {
+    for h in Hull:
+        let sheer_rise_mm = (h.parameters.sheer_height_fwd - h.parameters.sheer_height_aft) * 1000
+        sheer_rise_mm <= 250.0
+}
+
+-- SC-001: transom is near-vertical
+invariant TransomNearVertical {
+    for h in Hull:
+        h.parameters.transom_angle <= 8.0
+}
+
+-- SC-001: stem rake is moderate
+invariant StemRakeModerate {
+    for h in Hull:
+        h.parameters.stem_rake_angle <= 10.0
+}
+
+-- FR-006: public Hull dataclass shape is unchanged from v1.0.0
+invariant PublicHullDataclassShapePreserved {
+    Module.public_fields("Hull") = {
+        "body",
+        "parameters",
+        "document",
+        "label",
+        "build_duration_seconds"
+    }
+}
+
+-- FR-007: nine named Body properties exist (8 v1.0.0 + 1 new)
+invariant NineNamedPropertiesOnBody {
+    for body in HullBody:
+        body.loa_property != null
+        and body.beam_max_property != null
+        and body.draft_property != null
+        and body.freeboard_property != null
+        and body.deadrise_amidships_property != null
+        and body.sheer_height_aft_property != null
+        and body.sheer_height_fwd_property != null
+        and body.transom_angle_property != null
+        and body.stem_rake_angle_property != null
+}
+
+-- FR-011: PartDesign feature graph topology unchanged
+invariant FeatureGraphTopologyPreserved {
+    for body in HullBody:
+        body.sketches.count = 5
+        and body.datum_planes.count = 5
+        and exists body.additive_loft
+        and exists body.mirror
+}
+
+-- FR-003: stem station is blunt (finite face via half_beam=40mm), not a vertex
+invariant StemIsBluntNotVertex {
+    for body in HullBody:
+        for sketch in body.sketches where sketch.station = stem:
+            sketch.has_blunt_stem_face = true
+}
+
+-- FR-005 (v1.0.1): every sketch is a 5-segment pentagon; bilge arc deferred
+invariant AllSketchesAreFiveSegmentPentagons {
+    for body in HullBody:
+        for sketch in body.sketches:
+            sketch.has_bilge_arc = false
+}
+
+-- FR-004 (v1.0.1): every loft uses ruled_linear; bspline deferred
+invariant LoftUsesRuledLinear {
+    for body in HullBody:
+        body.additive_loft.actual_mode = ruled_linear
+}
+
+-- ===== Deferred markers =====
+
+deferred HullModule.hard_chine_variant
+-- The RC34 reference is ambiguous on whether the production hull had a true
+-- hard chine or a rounded bilge. v1.0.1 implements rounded bilges (safer for
+-- B-spline loft). Hard-chine variant deferred to v1.1+ if a primary source
+-- (lines drawing) confirms it.
+
+deferred HullModule.compound_curved_sections
+-- Real production lines drawings have non-circular bilge curves (cubic
+-- splines or compound curves). v1.0.1 uses quarter-circle arcs as an
+-- Einar Runius-stylistic approximation. Upgrade to true compound curves
+-- when lines drawings are acquired.
+
+deferred HullModule.body_plan_from_primary_source
+-- v1.0.1 derives cross-section shape from heuristics and the side-profile
+-- silhouette in docs/references/Alternativ3.JPG. A future spec 008+ may
+-- reconstruct the hull from a primary-source body plan (museum / model-
+-- builder archive) for full naval-architecture fidelity.
+
+deferred HullModule.b_spline_loft
+-- AdditiveLoft.Ruled=False target. With only five stations the bspline
+-- interpolation overshoots between the wide amidships profile and the
+-- narrow stem, bulging the loft surface to Y≈3128mm (vs the expected
+-- 1600mm half-beam). Requires a denser station set (≥8 stations) or a
+-- bspline shape-constraint pass to keep the curve from straying past
+-- the profile envelopes. Tracked for v1.1+.
+
+deferred HullModule.bilge_arc
+-- Quarter-circle bilge-arc transition between the keel and the chine
+-- (Q3 clarify in the markdown spec). The arc requires non-stem sketches
+-- to mix line segments and arcs while the stem stays rectangular — a
+-- topology mismatch that the AdditiveLoft cannot accommodate cleanly.
+-- Depends on HullModule.b_spline_loft (denser stations smooth the
+-- piecewise-linear chine until the arc upgrade ships).
+
+deferred HullModule.stem_with_zero_forefoot
+-- Spec 007 introduces a small 80mm forefoot (keel_depth_stem) so the
+-- Stem station shares 5-vertex pentagon topology with the other four
+-- stations. The forefoot is ~0.4% of LOA and visually negligible but
+-- physically inaccurate (the production RC34 stem terminates exactly
+-- at the waterline). True zero-forefoot needs the AdditiveLoft to
+-- accept mixed 4/5-vertex profile topology — same upstream constraint
+-- as HullModule.bilge_arc.

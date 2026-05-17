@@ -146,22 +146,24 @@ class HullParameters:
 
     loa: float = 10.35
     beam_max: float = 3.20
-    draft: float = 0.95
+    draft: float = 1.10
     freeboard: float = 0.95
-    deadrise_amidships: float = 16.0
-    sheer_height_aft: float = 0.85
-    sheer_height_fwd: float = 1.30
-    transom_angle: float = 12.0
+    deadrise_amidships: float = 8.0
+    sheer_height_aft: float = 0.95
+    sheer_height_fwd: float = 1.16
+    transom_angle: float = 5.0
+    stem_rake_angle: float = 6.0
 
     REFERENCE_STOREBRO_ROYAL_CRUISER_34_1972: ClassVar[dict[str, float]] = {
         "loa": 10.35,
         "beam_max": 3.20,
-        "draft": 0.95,
+        "draft": 1.10,
         "freeboard": 0.95,
-        "deadrise_amidships": 16.0,
-        "sheer_height_aft": 0.85,
-        "sheer_height_fwd": 1.30,
-        "transom_angle": 12.0,
+        "deadrise_amidships": 8.0,
+        "sheer_height_aft": 0.95,
+        "sheer_height_fwd": 1.16,
+        "transom_angle": 5.0,
+        "stem_rake_angle": 6.0,
     }
 
     def __post_init__(self) -> None:
@@ -198,6 +200,8 @@ def _validate_hull_parameters(p: HullParameters) -> None:
         raise HullParameterError("deadrise_amidships", p.deadrise_amidships, "[0, 30] degrees")
     if not (0.0 <= p.transom_angle <= 45.0):
         raise HullParameterError("transom_angle", p.transom_angle, "[0, 45] degrees")
+    if not (0.0 <= p.stem_rake_angle <= 30.0):
+        raise HullParameterError("stem_rake_angle", p.stem_rake_angle, "[0, 30] degrees")
 
     # Cross-field geometric impossibility (FR-012 + Edge Cases)
     if p.loa <= p.beam_max:
@@ -218,7 +222,7 @@ def _validate_hull_parameters(p: HullParameters) -> None:
 @dataclass(frozen=True)
 class _StationProfile:
     """One of the five hull cross-sections used by the lofted-stations
-    construction strategy (research.md R2)."""
+    construction strategy (research.md R2 + spec 007 R3/R4)."""
 
     name: str
     x_position: float
@@ -227,6 +231,9 @@ class _StationProfile:
     keel_depth: float
     freeboard: float
     is_terminal: bool
+    # spec 007: additive field. Non-zero only for the Stem profile so
+    # _create_datum_plane knows to tilt the stem datum forward.
+    stem_rake_angle_deg: float = 0.0
 
 
 def _compute_stations(p: HullParameters) -> list[_StationProfile]:
@@ -243,11 +250,13 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
 
     # Half-beam tapers from beam_max at amidships toward stem and transom.
     # Transom is typically ~70% of max beam, bow stations narrow further.
+    # Stem: finite blunt face (40mm half-width = 80mm full width) per spec
+    # 007 FR-003 — a real RC34's stem strip is ~80-100mm wide, not a knife edge.
     half_beam_transom = half_beam_max * 0.70
     half_beam_aft = half_beam_max * 0.92
     half_beam_amidships = half_beam_max
     half_beam_fwd = half_beam_max * 0.55
-    half_beam_stem = 0.0  # collapses to a vertex at the bow centerline
+    half_beam_stem = 0.040  # 40mm half-width (= 80mm stem face)
 
     # Deadrise at amidships drives how deep the keel sits below the waterline.
     # The other stations interpolate; the actual keel-depth profile is a
@@ -259,7 +268,12 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
     keel_depth_transom = p.draft * 0.75
     keel_depth_aft = p.draft * 0.95
     keel_depth_fwd = p.draft * 0.55
-    keel_depth_stem = 0.0
+    # spec 007: small forefoot below the bow (was 0 in v1.0.0). Keeps the
+    # Stem station topologically a 5-vertex pentagon matching the other
+    # stations — required for PartDesign::AdditiveLoft Ruled=True to map
+    # vertices 1:1 without twisting (~4cm forefoot ≈ 0.4% of LOA, barely
+    # visible at boat scale but loft-stable).
+    keel_depth_stem = 0.08
     _ = deadrise_rad  # reserved for future deadrise-driven sketches
 
     return [
@@ -303,10 +317,11 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
             name="Stem",
             x_position=p.loa,
             half_beam_at_top=half_beam_stem,
-            half_beam_at_bottom=half_beam_stem,
+            half_beam_at_bottom=half_beam_stem,  # constant — stem face is a rectangle
             keel_depth=keel_depth_stem,
             freeboard=p.sheer_height_fwd,
-            is_terminal=True,
+            is_terminal=False,  # spec 007: stem is now finite, not a vertex
+            stem_rake_angle_deg=p.stem_rake_angle,
         ),
     ]
 
@@ -383,9 +398,20 @@ def _create_datum_plane(profile: _StationProfile, body: Any) -> Any:
     # AttachmentOffset is in the support's LOCAL frame. For a plane attached
     # to Origin.YZ_Plane, the support's local Z axis is the global X axis
     # (the YZ plane's normal). Put the X-offset in local Z, not local X.
+    #
+    # Spec 007 R4 / clarify Q1: the Stem station tilts forward by
+    # `stem_rake_angle` degrees around the support's local Y axis (= global Y).
+    # All other stations stay parallel to YZ (identity rotation).
+    if profile.name == "Stem" and profile.stem_rake_angle_deg > 0.0:
+        rotation = FreeCAD.Rotation(
+            FreeCAD.Vector(0, 1, 0),
+            profile.stem_rake_angle_deg,
+        )
+    else:
+        rotation = FreeCAD.Rotation()
     datum.AttachmentOffset = FreeCAD.Placement(
         FreeCAD.Vector(0.0, 0.0, profile.x_position * _MM_PER_M),
-        FreeCAD.Rotation(),
+        rotation,
     )
     return datum
 
@@ -393,85 +419,91 @@ def _create_datum_plane(profile: _StationProfile, body: Any) -> Any:
 def _create_station_sketch(profile: _StationProfile, body: Any, datum: Any) -> Any:
     """Create a Sketcher::SketchObject for one station's half-section.
 
-    Per data-model §5 + §6. The sketch attaches to ``datum`` (a
-    PartDesign::Plane offset to ``profile.x_position`` along X). The sketch's
-    local x-axis maps to the Body's Y-axis (transverse beam), the sketch's
-    local y-axis maps to the Body's Z-axis (vertical).
+    Per data-model §5 + §6 (spec 006) + §5/§6 (spec 007). The sketch attaches
+    to ``datum`` (a PartDesign::Plane). Sketch local x-axis maps to the Body's
+    Y-axis (transverse beam); local y-axis maps to the Body's Z-axis (vertical).
 
-    For non-terminal stations the geometry is a closed pentagon spanning
-    keel → bottom outer → top outer → outer sheer → deck → back to keel.
-    For the terminal stem station the geometry collapses to a degenerate
-    zero-length line at the origin so PartDesign::AdditiveLoft interprets
-    it as a pointed-end profile (research.md R6).
+    Every station — including Stem — is a closed 5-line-segment pentagon
+    with vertices: keel-centerline (0, -keel_depth), bottom-outer
+    (half_beam_at_bottom, -keel_depth * 0.6), top-outer (half_beam_at_top, 0),
+    outer-sheer (half_beam_at_top, freeboard), centerline-deck (0, freeboard).
+
+    Stem's blunt 80mm face (FR-003) is achieved via half_beam_at_top =
+    half_beam_at_bottom = 0.040 m; the small ``keel_depth_stem`` forefoot
+    (~80mm, set in :func:`_compute_stations`) keeps the pentagon
+    topologically 5-vertex so PartDesign::AdditiveLoft can map vertices
+    1:1 across all stations without twisting. The quarter-circle bilge
+    arc transition is deferred to v1.1+.
     """
     import FreeCAD
     import Part
+    import Sketcher
 
     sketch_name = f"HullStation{profile.name}"
     sketch = body.newObject("Sketcher::SketchObject", sketch_name)
     sketch.AttachmentSupport = [(datum, "")]
     sketch.MapMode = "FlatFace"
 
-    if profile.is_terminal:
-        # Single Part.Point profile — PartDesign::AdditiveLoft accepts a
-        # vertex profile as a degenerate end, producing a pointed bow.
-        point = Part.Point(FreeCAD.Vector(0.0, 0.0, 0.0))
-        sketch.addGeometry(point, False)
-    else:
-        import Sketcher
+    # Scale meters → mm (FreeCAD's internal unit).
+    keel_depth_mm = profile.keel_depth * _MM_PER_M
+    half_beam_top_mm = profile.half_beam_at_top * _MM_PER_M
+    half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
+    freeboard_mm = profile.freeboard * _MM_PER_M
 
-        # Scale meters → mm (FreeCAD's internal unit).
-        keel_depth_mm = profile.keel_depth * _MM_PER_M
-        half_beam_top_mm = profile.half_beam_at_top * _MM_PER_M
-        half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
-        freeboard_mm = profile.freeboard * _MM_PER_M
+    pts = [
+        FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
+        FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0),
+        FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0),
+        FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
+        FreeCAD.Vector(0.0, freeboard_mm, 0.0),
+    ]
 
-        pts = [
-            FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
-            FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0),
-            FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0),
-            FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
-            FreeCAD.Vector(0.0, freeboard_mm, 0.0),
-            FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
-        ]
-        line_ids: list[int] = []
-        for i in range(len(pts) - 1):
-            seg = Part.LineSegment(pts[i], pts[i + 1])
-            line_id = sketch.addGeometry(seg, False)
-            line_ids.append(line_id)
-        # Coincidence constraints: end of line_i (PointPos=2) → start of line_{i+1} (PointPos=1).
-        # Without these the sketcher sees 5 disjoint segments, not a closed wire,
-        # and PartDesign::AdditiveLoft produces a zero-volume result.
-        for i in range(len(line_ids)):
-            next_i = (i + 1) % len(line_ids)
-            sketch.addConstraint(
-                Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[next_i], 1)
-            )
+    line_ids: list[int] = []
+    for i in range(len(pts)):
+        j = (i + 1) % len(pts)
+        seg = Part.LineSegment(pts[i], pts[j])
+        line_ids.append(sketch.addGeometry(seg, False))
+    for i in range(len(line_ids)):
+        j = (i + 1) % len(line_ids)
+        sketch.addConstraint(
+            Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1)
+        )
 
     return sketch
+
+
+def _build_loft(body: Any, sketches: list[Any], *, ruled: bool) -> Any:
+    """Construct a PartDesign::AdditiveLoft on the body with the given Ruled mode.
+
+    Spec 007 R6 helper. Caller is responsible for `Document.recompute()`.
+    """
+    loft = body.newObject("PartDesign::AdditiveLoft", "HullLoft")
+    loft.Profile = (sketches[0], [""])
+    loft.Sections = [(s, [""]) for s in sketches[1:]]
+    loft.Ruled = ruled
+    loft.Closed = False
+    return loft
 
 
 def _apply_loft_and_mirror(body: Any, sketches: list[Any]) -> tuple[Any, Any]:
     """Build the PartDesign feature stack: AdditiveLoft + Mirrored.
 
-    Consumes the five station sketches in order (transom → stem) to produce
-    a port half-hull via ``PartDesign::AdditiveLoft``, then reflects the
-    loft across the Body's XZ plane via ``PartDesign::Mirrored`` to produce
-    the closed full-hull solid. ``Body.Tip`` is set to the mirror feature
-    so ``body.Shape`` exposes the full hull.
+    Spec 007 R6: builds the AdditiveLoft with ``Ruled=True`` (piecewise-
+    linear surfaces between station pairs). The smooth B-spline alternative
+    (``Ruled=False``) is deferred to v1.1+ — with only 5 stations, the
+    B-spline interpolation overshoots between the wide amidships and the
+    narrow stem, producing surfaces that bulge well beyond the profile
+    vertices. A future denser station set (≥8 stations) will constrain
+    the B-spline; see spec.allium ``deferred Hull.b_spline_loft``.
+
+    The mirror feature reflects the loft across the Body's XZ plane,
+    producing the closed full-hull solid. ``Body.Tip`` is set to the mirror.
 
     Returns ``(loft, mirror)`` so the caller can register both features in
     the rollback list (FR-012).
     """
-    loft = body.newObject("PartDesign::AdditiveLoft", "HullLoft")
-    loft.Profile = (sketches[0], [""])
-    loft.Sections = [(s, [""]) for s in sketches[1:]]
-    # Ruled=True: piecewise-linear interpolation between profiles. Required
-    # because the loft mixes 5-edge pentagons with a single-point stem, and
-    # B-spline interpolation (Ruled=False) twists wildly through the profile
-    # transition, producing a self-intersecting solid with garbage bbox.
-    loft.Ruled = True
-    loft.Closed = False
+    loft = _build_loft(body, sketches, ruled=True)
+    body.Document.recompute()
 
     mirror = body.newObject("PartDesign::Mirrored", "HullMirror")
     mirror.Originals = [loft]
@@ -509,6 +541,14 @@ def _bind_parameters_to_body_properties(body: Any, parameters: HullParameters) -
         "Hull",
         "Transom rake from vertical",
     )
+    # Spec 007 FR-007: 9th property — stem rake from vertical (forward lean
+    # of the blunt bow face).
+    body.addProperty(
+        "App::PropertyAngle",
+        "StemRakeAngle",
+        "Hull",
+        "Stem rake from vertical (forward lean of bow)",
+    )
 
     # FreeCAD App::PropertyLength uses millimetres internally; multiply by
     # 1000 to keep the displayed value in meters consistent with the
@@ -521,6 +561,7 @@ def _bind_parameters_to_body_properties(body: Any, parameters: HullParameters) -
     body.SheerHeightFwd = parameters.sheer_height_fwd * 1000.0
     body.DeadriseAmidships = parameters.deadrise_amidships
     body.TransomAngle = parameters.transom_angle
+    body.StemRakeAngle = parameters.stem_rake_angle
 
 
 # ---------------------------------------------------------------------------

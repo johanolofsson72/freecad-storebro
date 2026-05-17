@@ -21,15 +21,17 @@
 
 # Seeded against FreeCAD 1.1.1
 # Source: HullParameters() defaults (Storebro Royal Cruiser 34, 1972)
+# Refreshed for v1.0.1 spec 007 hull fidelity refresh (new defaults +
+# stem_rake_angle field changes the source_hash and the geometry hashes).
 
-[step__1_1_1__b8fac77b0986__44136fa355b3]
+[step__1_1_1__b0380b2cc068__44136fa355b3]
 sha256 = "273dcf772c2cff97873249757978e681df294512b1a0da4548914cfab92a6cd9"
 
-[stl__1_1_1__b8fac77b0986__50ebc2c69987]
-sha256 = "db0ebdd3574df5c3c67c4223e552a939c9fce3f72980b775cea4ea2c93c0e27d"
+[stl__1_1_1__b0380b2cc068__50ebc2c69987]
+sha256 = "f6b8d800696c95f6bffdb3a16387f14991d558b2f0f2c4263dc9dc48426dfe76"
 
-[brep__1_1_1__b8fac77b0986__44136fa355b3]
-sha256 = "658ba229a8cfca7f85223f2df9244c381ee0d8008fff77402668058409f4096a"
+[brep__1_1_1__b0380b2cc068__44136fa355b3]
+sha256 = "c6a68ef59052d1f4d6383a4e8c4c5ceca09513dfbc18d239cb3c4434b3d007ea"
 
-[fcstd__1_1_1__b8fac77b0986__44136fa355b3]
-sha256 = "64a06523c0ebb8233b5a3c51433df9d340ced4e91922fdf3e269354ef8b47ef1"
+[fcstd__1_1_1__b0380b2cc068__44136fa355b3]
+sha256 = "c9cf27e1225f30e655c382e53d683b40172daf1f688d1ec095f658a70f4e0c68"
