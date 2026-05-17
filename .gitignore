@@ -10,6 +10,10 @@
 .claude/.local-llm-trace.log
 .claude/local-llm-*.log
 .claude/local-llm-*.log.*
+.claude/.local-llm-cache/
+
+# Playwright MCP session state (per-session, never committed)
+.playwright-mcp/
 
 # CLAUDE.local.md is personal, never committed
 CLAUDE.local.md
