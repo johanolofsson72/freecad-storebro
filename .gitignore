@@ -1,0 +1,42 @@
+# OS / editors
+.DS_Store
+*.swp
+
+# Local LLM artifacts (per-developer, never committed)
+.claude/.local-llm-commit-draft.md
+.claude/.local-llm-pr-draft.md
+.claude/.local-llm-changelog-draft.md
+.claude/.local-llm-fire.log
+.claude/.local-llm-trace.log
+.claude/local-llm-*.log
+.claude/local-llm-*.log.*
+
+# CLAUDE.local.md is personal, never committed
+CLAUDE.local.md
+
+# Speckit work-in-progress
+.specify/cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.uv-cache/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# FreeCAD locks / backup
+*.FCBak
+*.lock
+
+# Generated signoff artifacts (per quickstart.md / T033)
+/tmp/storebro_hull_signoff_*.FCStd

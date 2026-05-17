@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "freecad-storebro"
+version = "0.1.0"
+description = "Parametric 3D model of a vintage Storebro motor yacht inside FreeCAD"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = "MIT"
+authors = [
+    { name = "Johan Olofsson", email = "johan.olofsson@noisycricket.se" },
+]
+keywords = ["freecad", "parametric", "cad", "yacht", "storebro", "b-rep"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/johanolofsson72/freecad-storebro"
+Repository = "https://github.com/johanolofsson72/freecad-storebro"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/storebro"]
+
+# Supported FreeCAD version range (constitution principle VII).
+# Read at runtime by src/storebro/_freecad_check.py via tomllib.
+[tool.freecad-storebro]
+supported_freecad = ">=1.1,<2.0"
+supported_freecad_min = [1, 1]
+supported_freecad_max_exclusive = [2, 0]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501", # line-too-long handled by formatter
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/storebro"]
+
+[[tool.mypy.overrides]]
+module = ["FreeCAD", "FreeCAD.*", "Part", "Sketcher", "PartDesign"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "requires_freecad: marks tests that require a running FreeCAD installation (skipped if FreeCAD is not importable)",
+    "unit: marks pure-Python unit tests that do not require FreeCAD",
+]

@@ -1,0 +1,262 @@
+-- allium: 3
+--
+-- Hull module specification (formal). Derived from specs/001-hull-module/spec.md
+-- after /speckit-clarify (5 auto-picked clarifications applied). Full pipeline
+-- track per .claude/rules/specs.md.
+--
+-- Constitutional principles that govern this module (.specify/memory/constitution.md):
+--   I.   Parametric Everything       (no magic numbers; every dimension named)
+--   II.  Reproducibility             (structural determinism; export handles bytes)
+--   III. FreeCAD-Idiomatic           (Part / PartDesign / Sketch / Body — no raw mesh)
+--   IV.  Reference Fidelity          (defaults match historical Storebro ±1%)
+--   VII. FreeCAD Version Discipline  (lazy first-call version check)
+
+-- ===== External entities (managed by FreeCAD itself) =====
+-- Source spec: FreeCAD 1.1+ Python API (https://wiki.freecad.org/Python_API)
+
+external entity FreeCADDocument {
+    name: String
+    is_active: Boolean
+}
+
+external entity FreeCADBody {
+    label: String
+    document: FreeCADDocument
+    volume: Decimal
+    bbox_length: Decimal
+    bbox_width: Decimal
+    bbox_height: Decimal
+    vertex_count: Integer
+    edge_count: Integer
+    face_count: Integer
+    is_parametric_in_gui: Boolean
+    is_closed_shell: Boolean
+    is_symmetric_about_centerline: Boolean
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+}
+
+-- ===== Exception entities (public hull module API surface, per FR-015) =====
+
+entity HullParameterError {
+    parameter_name: String
+    parameter_value: String
+    valid_range: String
+    message: String
+}
+
+entity HullConstructionError {
+    underlying_message: String
+    parameters: HullParameters?
+    detected_version: FreeCADVersion?
+}
+
+-- ===== Configuration =====
+
+config {
+    reference_fidelity_tolerance_pct: Decimal = 1.0
+    max_build_seconds_default_hull: Integer = 30
+    min_invalid_input_test_cases: Integer = 5
+    supported_freecad_min_major: Integer = 1
+    supported_freecad_min_minor: Integer = 1
+    max_deadrise_degrees: Decimal = 30.0
+    max_transom_angle_degrees: Decimal = 45.0
+    parametric_perturbation_pct: Decimal = 10.0
+    default_body_label: String = "Hull"
+}
+
+-- ===== Value object: hull parameters (FR-008) =====
+--
+-- All lengths in meters, all angles in degrees. Symmetric about the centerline.
+
+value HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    deadrise_amidships: Decimal
+    sheer_height_aft: Decimal
+    sheer_height_fwd: Decimal
+    transom_angle: Decimal
+    freeboard: Decimal
+
+    -- FR-004 + Edge Cases: positivity of every dimensional parameter
+    invariant PositiveLOA          { this.loa > 0 }
+    invariant PositiveBeam         { this.beam_max > 0 }
+    invariant PositiveDraft        { this.draft > 0 }
+    invariant PositiveFreeboard    { this.freeboard > 0 }
+    invariant PositiveSheerAft     { this.sheer_height_aft > 0 }
+    invariant PositiveSheerFwd     { this.sheer_height_fwd > 0 }
+
+    -- FR-009 + Edge Cases: angular ranges
+    invariant DeadriseInRange      { this.deadrise_amidships >= 0 and this.deadrise_amidships <= 30 }
+    invariant TransomAngleInRange  { this.transom_angle >= 0 and this.transom_angle <= 45 }
+
+    -- FR-012 + Edge Cases: geometric impossibilities
+    invariant LOAGreaterThanBeam   { this.loa > this.beam_max }
+    invariant SheerNotInverted     { this.sheer_height_fwd >= this.sheer_height_aft }
+}
+
+-- ===== Domain entity: the constructed hull =====
+
+entity Hull {
+    parameters: HullParameters
+    body: FreeCADBody
+    document: FreeCADDocument
+    label: String
+    build_duration_seconds: Decimal
+
+    -- Constitution III + FR-006/FR-007
+    invariant ParametricInGUI       { this.body.is_parametric_in_gui = true }
+
+    -- FR-009
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+
+    -- FR-010
+    invariant ClosedWatertightShell { this.body.is_closed_shell = true }
+
+    -- SC-002: 30-second build budget on a developer laptop
+    invariant WithinBuildBudget     { this.build_duration_seconds <= 30 }
+}
+
+-- ===== Rules =====
+--
+-- Public API trigger: BuildHull(parameters, document, name)
+-- This is the only externally-invoked rule trigger; the rest model internal
+-- failure modes that the same `when:` clause routes into. A future module
+-- (e.g. storebro.cli) will declare the surface that exposes this trigger to
+-- end users. For now, callers invoke it directly from Python via the
+-- documented public function on the storebro.hull module.
+
+-- FR-001 + FR-002 + FR-016 + FR-017: the public builder.
+-- Lazy FreeCAD-version check is required to have passed (FR-013) before geometry runs;
+-- that check is captured as a separate rule below.
+rule BuildHull {
+    when: BuildHull(parameters, document, name)
+    requires:
+        parameters.loa > 0
+        parameters.beam_max > 0
+        parameters.draft > 0
+        parameters.freeboard > 0
+        parameters.sheer_height_aft > 0
+        parameters.sheer_height_fwd > 0
+        parameters.deadrise_amidships >= 0
+        parameters.deadrise_amidships <= 30
+        parameters.transom_angle >= 0
+        parameters.transom_angle <= 45
+        parameters.loa > parameters.beam_max
+        parameters.sheer_height_fwd >= parameters.sheer_height_aft
+    ensures:
+        let resolved_label = name ?? "Hull"
+        Hull.created(
+            parameters: parameters,
+            document: document ?? FreeCADDocument.active,
+            label: resolved_label,
+            body: FreeCADBody.created(
+                label: resolved_label,
+                is_parametric_in_gui: true,
+                is_closed_shell: true,
+                is_symmetric_about_centerline: true
+            )
+        )
+}
+
+-- FR-004 + FR-015 + Edge Cases: zero-or-negative dimensional parameter
+rule RejectInvalidDimensionalParameter {
+    when: BuildHull(parameters, document, name)
+    requires:
+        parameters.loa <= 0
+        or parameters.beam_max <= 0
+        or parameters.draft <= 0
+        or parameters.freeboard <= 0
+        or parameters.sheer_height_aft <= 0
+        or parameters.sheer_height_fwd <= 0
+    ensures: HullParameterError.raised()
+}
+
+-- FR-004 + FR-015 + Edge Cases: angular parameter out of range
+rule RejectAngularParameterOutOfRange {
+    when: BuildHull(parameters, document, name)
+    requires:
+        parameters.deadrise_amidships < 0
+        or parameters.deadrise_amidships > 30
+        or parameters.transom_angle < 0
+        or parameters.transom_angle > 45
+    ensures: HullParameterError.raised()
+}
+
+-- FR-012 + FR-015 + Edge Cases: geometrically impossible combination
+rule RejectGeometricImpossibility {
+    when: BuildHull(parameters, document, name)
+    requires:
+        parameters.loa <= parameters.beam_max
+        or parameters.sheer_height_fwd < parameters.sheer_height_aft
+    ensures: HullParameterError.raised()
+}
+
+-- FR-013 + FR-015: unsupported FreeCAD version on first call (lazy check)
+rule RejectUnsupportedFreeCADVersion {
+    when: BuildHull(parameters, document, name)
+    requires:
+        FreeCADVersion.major < 1
+        or (FreeCADVersion.major = 1 and FreeCADVersion.minor < 1)
+    ensures: HullConstructionError.raised()
+}
+
+-- FR-015 + Edge Cases: FreeCAD-side construction failure must be wrapped
+rule WrapFreeCADConstructionFailure {
+    when: FreeCADConstructionFailure(parameters)
+    ensures: HullConstructionError.raised()
+}
+
+-- ===== Global invariants =====
+
+-- FR-005 + SC-003: structural determinism — two hulls built from the same parameters
+-- have identical topology counts and floating-point-tolerant identical dimensions.
+-- (Expressed as a property over the rule's output rather than over arbitrary Hull pairs,
+-- because Allium iteration is single-variable.)
+invariant StructuralDeterminism {
+    for h in Hull:
+        Hull.canonical_for(h.parameters).body.volume = h.body.volume
+        and Hull.canonical_for(h.parameters).body.bbox_length = h.body.bbox_length
+        and Hull.canonical_for(h.parameters).body.bbox_width = h.body.bbox_width
+        and Hull.canonical_for(h.parameters).body.bbox_height = h.body.bbox_height
+        and Hull.canonical_for(h.parameters).body.vertex_count = h.body.vertex_count
+        and Hull.canonical_for(h.parameters).body.edge_count = h.body.edge_count
+        and Hull.canonical_for(h.parameters).body.face_count = h.body.face_count
+}
+
+-- SC-001 + Constitution IV: default hull matches historical Storebro within ±1%.
+-- ReferenceStorebro values are deferred to /speckit-plan (see open question below).
+invariant DefaultHullMatchesReferenceFidelity {
+    let defaults = HullParameters.canonical_defaults
+    let h = Hull.canonical_for(defaults)
+    abs(h.body.bbox_length - ReferenceStorebro.loa) / ReferenceStorebro.loa <= 0.01
+    and abs(h.body.bbox_width - ReferenceStorebro.beam_max) / ReferenceStorebro.beam_max <= 0.01
+    and abs(defaults.draft - ReferenceStorebro.draft) / ReferenceStorebro.draft <= 0.01
+    and abs(defaults.freeboard - ReferenceStorebro.freeboard) / ReferenceStorebro.freeboard <= 0.01
+}
+
+-- SC-006: every public hull function has at least one geometry property test.
+invariant TestCoverageOnPublicSurface {
+    for f in Module.public_functions("storebro.hull"):
+        Tests.has_geometry_property_test(f)
+}
+
+-- SC-007: validation errors cite parameter name, value, and valid range.
+invariant ValidationErrorMessageFormat {
+    for e in HullParameterError:
+        e.message_contains(e.parameter_name)
+        and e.message_contains(e.parameter_value)
+        and e.message_contains(e.valid_range)
+}
+
+-- ===== Open questions and deferred items =====
+
+open question "Exact canonical default values for LOA, beam_max, draft, deadrise_amidships, sheer_height_aft, sheer_height_fwd, transom_angle, and freeboard are not pinned in this spec. They are deferred to /speckit-plan, which will cite each against docs/references/. The DefaultHullMatchesReferenceFidelity invariant only becomes checkable once those values are pinned."
+
+open question "Should structured logging or telemetry be introduced in v1.1+? Decision deferred from /speckit-clarify Q4 — v1.0 hull module emits NO logging. Revisit if profiling demand emerges."
+
+open question "Should the hull module support appendages (keel fin, skeg, rudder mounts, propeller tunnel) in a future version, or do those move to a separate appendages module? FR-010 places them out of scope for v1.0; the v1.1+ home is undecided."
