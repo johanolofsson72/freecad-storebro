@@ -77,7 +77,7 @@ strict = true
 files = ["src/storebro"]
 
 [[tool.mypy.overrides]]
-module = ["FreeCAD", "FreeCAD.*", "Part", "Sketcher", "PartDesign"]
+module = ["FreeCAD", "FreeCAD.*", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

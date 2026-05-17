@@ -1,0 +1,365 @@
+-- allium: 3
+--
+-- Export module specification (formal). Derived from specs/002-export-module/spec.md
+-- after /speckit-clarify (5 auto-picked clarifications applied). Full pipeline track
+-- per .claude/rules/specs.md.
+--
+-- Constitutional principles that govern this module (.specify/memory/constitution.md):
+--   II.  Reproducibility (NON-NEGOTIABLE)  — same inputs ⇒ byte-identical output
+--   III. FreeCAD-Idiomatic                  — only the STL writer may emit a mesh;
+--                                              every other writer stays in B-rep land
+--   V.   Test-Gated Releases                — hash-pinned regression tests in CI
+--   VII. FreeCAD Version Discipline         — hash baselines pinned per FreeCAD version
+
+-- ===== Format enum (FR-001) =====
+
+enum ExportFormat { fcstd | step | stl | brep }
+
+-- ===== External entities (managed by FreeCAD or the filesystem) =====
+
+external entity FreeCADDocument {
+    name: String
+    is_active: Boolean
+    has_unsaved_changes: Boolean
+}
+
+external entity FreeCADBody {
+    label: String
+    document: FreeCADDocument
+    has_valid_shape: Boolean
+    shape_volume: Decimal
+    vertex_count: Integer
+    edge_count: Integer
+    face_count: Integer
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+}
+
+external entity Filesystem {
+    -- Conceptually models the parent-directory-exists / path-is-file / path-exists
+    -- predicates that the writers consult before writing.
+    path: String
+}
+
+-- ===== Configuration (FR-010 / FR-017 / FR-018 / FR-020 / clarify answers) =====
+
+config {
+    default_stl_tessellation_tolerance_m: Decimal = 0.001
+    step_schema_version: String = "AP214"
+    creator_sentinel: String = "freecad-storebro"
+    fcstd_fixed_zip_epoch: String = "1980-01-01T00:00:00Z"
+    fcstd_fixed_created_by: String = "freecad-storebro"
+    fcstd_fixed_last_modified_by: String = "freecad-storebro"
+    supported_freecad_min_major: Integer = 1
+    supported_freecad_min_minor: Integer = 1
+    -- Performance budgets (SC-002, units of seconds)
+    step_budget_seconds: Decimal = 5.0
+    stl_budget_seconds: Decimal = 10.0
+    fcstd_budget_seconds: Decimal = 3.0
+    brep_budget_seconds: Decimal = 3.0
+}
+
+-- ===== Value objects =====
+
+value TargetPath {
+    -- The output path supplied by the caller. Holds the resolved absolute path
+    -- plus the parsed extension for the format-vs-extension validation in FR-006.
+    absolute_path: String
+    extension: String      -- e.g. ".step", ".stl", ".brep", ".FCStd"
+    parent_dir: String
+}
+
+value TessellationTolerance {
+    meters: Decimal        -- absolute linear chord deviation, in meters
+
+    invariant Positive { this.meters > 0 }
+}
+
+value ShaHash {
+    hex_digest: String     -- SHA-256, 64 hex chars
+}
+
+-- ===== Exception entities (FR-007, public module API) =====
+
+entity ExportInputError {
+    field: String          -- which input failed validation (e.g. "target_path", "body")
+    reason: String         -- human-readable reason
+    offending_value: String?
+}
+
+entity ExportWriteError {
+    target_path: TargetPath?
+    underlying_message: String
+    format: ExportFormat?
+}
+
+-- ===== Domain entity: the produced file =====
+
+entity ExportArtifact {
+    target_path: TargetPath
+    format: ExportFormat
+    byte_count: Integer
+    sha256: ShaHash
+    build_duration_seconds: Decimal
+
+    invariant NonEmptyBytes      { this.byte_count > 0 }
+    invariant PositiveDuration   { this.build_duration_seconds >= 0 }
+
+    invariant WithinBudget {
+        (this.format = fcstd and this.build_duration_seconds <= 3.0)
+        or (this.format = step and this.build_duration_seconds <= 5.0)
+        or (this.format = stl and this.build_duration_seconds <= 10.0)
+        or (this.format = brep and this.build_duration_seconds <= 3.0)
+    }
+}
+
+-- ===== Rules: the four writer triggers =====
+
+-- FR-001 + FR-002 + FR-008 + FR-009 + FR-017: STEP writer
+rule WriteStep {
+    when: WriteStep(body, target_path, overwrite)
+    requires:
+        body.has_valid_shape = true
+        target_path.extension = ".step" or target_path.extension = ".stp"
+        FreeCADVersion.major >= 1
+    ensures:
+        ExportArtifact.created(
+            target_path: target_path,
+            format: step,
+            byte_count: ExportArtifact.measured_byte_count,
+            sha256: ExportArtifact.measured_sha256
+        )
+}
+
+-- FR-001 + FR-002 + FR-010 + FR-011 + FR-012: STL writer (the only mesh emitter)
+rule WriteStl {
+    when: WriteStl(body, target_path, overwrite, tessellation_tolerance)
+    requires:
+        body.has_valid_shape = true
+        target_path.extension = ".stl"
+        tessellation_tolerance.meters > 0
+    ensures:
+        ExportArtifact.created(
+            target_path: target_path,
+            format: stl,
+            byte_count: ExportArtifact.measured_byte_count,
+            sha256: ExportArtifact.measured_sha256
+        )
+}
+
+-- FR-001 + FR-002: BREP writer
+rule WriteBrep {
+    when: WriteBrep(body, target_path, overwrite)
+    requires:
+        body.has_valid_shape = true
+        target_path.extension = ".brep" or target_path.extension = ".brp"
+    ensures:
+        ExportArtifact.created(
+            target_path: target_path,
+            format: brep,
+            byte_count: ExportArtifact.measured_byte_count,
+            sha256: ExportArtifact.measured_sha256
+        )
+}
+
+-- FR-001 + FR-002 + FR-020: FCStd writer (zip post-processing)
+rule WriteFCStd {
+    when: WriteFCStd(document, target_path, overwrite)
+    requires:
+        target_path.extension = ".FCStd" or target_path.extension = ".fcstd"
+    ensures:
+        ExportArtifact.created(
+            target_path: target_path,
+            format: fcstd,
+            byte_count: ExportArtifact.measured_byte_count,
+            sha256: ExportArtifact.measured_sha256
+        )
+}
+
+-- ===== Rules: validation rejections (FR-006) =====
+
+-- Missing parent directory
+rule RejectMissingParentDirectory {
+    when: AnyWrite(target_path)
+    requires: not Filesystem.exists(target_path.parent_dir)
+    ensures: ExportInputError.raised()
+}
+
+-- Target path is a directory, not a file
+rule RejectTargetIsDirectory {
+    when: AnyWrite(target_path)
+    requires: Filesystem.is_directory(target_path.absolute_path)
+    ensures: ExportInputError.raised()
+}
+
+-- Wrong extension for declared format
+rule RejectWrongExtension {
+    when: AnyWrite(target_path, format)
+    requires:
+        (format = step and target_path.extension != ".step" and target_path.extension != ".stp")
+        or (format = stl and target_path.extension != ".stl")
+        or (format = brep and target_path.extension != ".brep" and target_path.extension != ".brp")
+        or (format = fcstd and target_path.extension != ".FCStd" and target_path.extension != ".fcstd")
+    ensures: ExportInputError.raised()
+}
+
+-- File exists and overwrite=False (FR-009)
+rule RejectExistingFileWhenOverwriteFalse {
+    when: AnyWrite(target_path, overwrite)
+    requires:
+        overwrite = false
+        Filesystem.is_file(target_path.absolute_path)
+    ensures: ExportInputError.raised()
+}
+
+-- Empty body (no Shape)
+rule RejectEmptyBody {
+    when: AnyBodyWrite(body)
+    requires: body.has_valid_shape = false
+    ensures: ExportInputError.raised()
+}
+
+-- ===== Rules: failure wrapping (FR-007) =====
+
+rule WrapFreeCADWriteFailure {
+    when: WriteFailure(target_path, format, underlying)
+    ensures: ExportWriteError.raised()
+}
+
+rule WrapFilesystemWriteFailure {
+    when: FilesystemFailure(target_path, format, underlying)
+    ensures: ExportWriteError.raised()
+}
+
+-- ===== Rules: unsupported FreeCAD version (FR-014, mirrors hull spec FR-013) =====
+
+rule RejectUnsupportedFreeCADVersion {
+    when: AnyWrite(target_path)
+    requires:
+        FreeCADVersion.major < 1
+        or (FreeCADVersion.major = 1 and FreeCADVersion.minor < 1)
+    ensures: ExportWriteError.raised()
+}
+
+-- ===== Global invariants =====
+
+-- FR-002 + SC-001: constitutional principle II checkpoint.
+-- For any two ExportArtifacts produced from the same (input, format, kwargs,
+-- FreeCAD version) tuple, their SHA-256 hashes are equal.
+invariant ByteIdenticalReproducibility {
+    -- For every produced artifact, its SHA-256 equals the canonical SHA-256
+    -- pinned for its (source inputs, format, kwargs, FreeCAD version) tuple.
+    -- Two artifacts produced from the same inputs therefore share their hash
+    -- because they both equal the same canonical value (transitive equality).
+    for a in ExportArtifact:
+        a.sha256.hex_digest = ExportArtifact.canonical_sha256_for_inputs(a)
+        and a.byte_count = ExportArtifact.canonical_byte_count_for_inputs(a)
+}
+
+-- FR-003: no embedded timestamps
+invariant NoEmbeddedTimestamps {
+    for a in ExportArtifact:
+        not Artifact.contains_clock_timestamp(a)
+}
+
+-- FR-004: no environment-dependent paths or user metadata in artifact
+invariant NoEnvironmentLeak {
+    for a in ExportArtifact:
+        not Artifact.contains_hostname(a)
+        and not Artifact.contains_username(a)
+        and not Artifact.contains_absolute_source_path(a)
+}
+
+-- FR-005 + FR-019: deterministic subshape ordering
+invariant DeterministicSubshapeOrdering {
+    for a in ExportArtifact:
+        Artifact.subshape_order(a) = Artifact.canonical_centroid_sort(a)
+}
+
+-- FR-008: atomic writes — no partial file on failure
+invariant NoPartialFileLeftBehind {
+    for w in WriteFailure:
+        not Filesystem.is_file(w.target_path.absolute_path)
+}
+
+-- FR-011: STL is binary, not ASCII
+invariant StlIsBinary {
+    for a in ExportArtifact where a.format = stl:
+        Artifact.is_binary_stl(a) = true
+}
+
+-- FR-012: only the STL writer may emit a mesh
+invariant StlIsOnlyMeshEmitter {
+    for a in ExportArtifact where a.format != stl:
+        not Artifact.contains_mesh_data(a)
+}
+
+-- FR-013: export is a leaf module
+invariant ExportIsLeafModule {
+    not Module.imports("storebro.export", "storebro.hull")
+    and not Module.imports("storebro.export", "storebro.deck")
+    and not Module.imports("storebro.export", "storebro.interior")
+    and not Module.imports("storebro.export", "storebro.cli")
+}
+
+-- FR-016: LF line endings for text formats
+invariant TextFormatsUseLfEndings {
+    for a in ExportArtifact
+        where a.format = step or a.format = brep:
+            Artifact.has_no_crlf(a) = true
+}
+
+-- FR-018: producer sentinel is the unsuffixed project name
+invariant ProducerSentinelStable {
+    for a in ExportArtifact where a.format = step or a.format = brep:
+        Artifact.producer_field(a) = "freecad-storebro"
+}
+
+-- SC-005: every public writer has at least one unit test AND one geometry test
+invariant TestCoverageEveryWriter {
+    for w in Module.public_functions("storebro.export"):
+        Tests.has_unit_test(w) and Tests.has_geometry_test(w)
+}
+
+-- SC-007: at least one forced-failure test per writer
+invariant ForcedFailureTestPerWriter {
+    for f in {fcstd, step, stl, brep}:
+        Tests.count_forced_failure_tests(f) >= 1
+}
+
+-- SC-008: STL watertight property
+invariant StlWatertightForWellFormedHull {
+    for a in ExportArtifact
+        where a.format = stl and Artifact.source_is_closed_shell(a):
+            Artifact.is_watertight_mesh(a) = true
+}
+
+-- ===== Deferred + open questions =====
+
+deferred ExportFormat.dxf
+-- DXF / IGES / glTF / OBJ deferred to v1.1+; v1.0 is the four formats above.
+
+deferred ExportFormat.iges
+
+deferred ExportFormat.gltf
+
+deferred ExportFormat.obj
+
+deferred ExportArtifact.gzip_compression
+
+deferred ExportArtifact.windows_support
+-- POSIX rename-based atomicity assumed; Windows is out of scope for v1.0
+-- (CI matrix is Ubuntu + macOS only).
+
+open question "STEP AP242 vs AP214 — v1.0 pins AP214 (clarify Q1). v1.1+ may add an explicit `schema` kwarg per FR-017; behavior, default, and migration path are TBD."
+
+-- OQ2 (cross-filesystem rename) resolved 2026-05-17: writer raises ExportWriteError
+-- when atomic rename fails for any reason (including cross-filesystem). No
+-- copy+delete fallback. See spec.md FR-008 for the updated requirement.
+
+-- OQ3 (multi-body / compound exports) resolved 2026-05-17: FR-019 applies the
+-- centroid sort recursively into Compound children at every nesting level.
+-- See spec.md FR-019.

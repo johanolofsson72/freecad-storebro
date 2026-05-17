@@ -13,6 +13,15 @@ Example:
     >>> # build_hull() requires FreeCAD 1.1+ on this host; see README.md.
 """
 
+from storebro.export import (
+    ExportArtifact,
+    ExportInputError,
+    ExportWriteError,
+    export_brep,
+    export_fcstd,
+    export_step,
+    export_stl,
+)
 from storebro.hull import (
     Hull,
     HullConstructionError,
@@ -21,13 +30,20 @@ from storebro.hull import (
     build_hull,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
+    "ExportArtifact",
+    "ExportInputError",
+    "ExportWriteError",
     "Hull",
     "HullConstructionError",
     "HullParameterError",
     "HullParameters",
     "__version__",
     "build_hull",
+    "export_brep",
+    "export_fcstd",
+    "export_step",
+    "export_stl",
 ]

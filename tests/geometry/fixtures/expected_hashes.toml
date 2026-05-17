@@ -1,0 +1,22 @@
+# SHA-256 baselines for the export module's regression tests.
+#
+# Key format (per research.md R6):
+#   "<format>__<freecad_version>__<source_hash>__<kwargs_hash>"
+#
+# - format: one of fcstd | step | stl | brep
+# - freecad_version: "<major>_<minor>_<patch>" from FreeCAD.Version() at write time
+# - source_hash: SHA-256 (first 12 hex chars) of HullParameters.__repr__() for the
+#   source hull, computed by tests/geometry/fixtures/refresh_hashes.py
+# - kwargs_hash: SHA-256 (first 12 hex chars) of sorted kwargs JSON,
+#   e.g. {"tessellation_tolerance": 0.001} for STL, {} for the others
+#
+# A FreeCAD-version bump is a TOML edit (run refresh_hashes.py on a host with
+# the new FreeCAD installed, paste the new stanzas, bump PATCH, note in CHANGELOG).
+# Per constitution VII, baseline drift across FreeCAD versions is allowed and
+# documented — it is NOT a determinism violation.
+#
+# To seed this file:
+#   uv run python tests/geometry/fixtures/refresh_hashes.py
+# and paste the printed stanzas into this file.
+
+# (no baselines yet — populate via refresh_hashes.py on a FreeCAD-equipped host)

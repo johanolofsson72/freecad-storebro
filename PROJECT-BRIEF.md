@@ -29,7 +29,7 @@ parameter-driven generator that produces editable B-rep geometry.
 | `storebro.hull` | Parametric hull: LOA, beam, draft, deadrise, sheer line, transom shape — **v0.1.0-alpha (spec 001 implemented 2026-05-17)** |
 | `storebro.deck` | Deck plate, cabin trunk, windshield, hardtop, railings |
 | `storebro.interior` | Cabins, galley, heads, salon; five canonical layouts (Alternativ1–5) loaded from YAML fixtures |
-| `storebro.export` | STEP / STL / BREP / `.FCStd` writers |
+| `storebro.export` | STEP / STL / BREP / `.FCStd` writers — **v0.2.0-alpha (spec 002 implemented 2026-05-17)** |
 | `storebro.cli` | Public CLI entry point: `storebro build`, `storebro list-layouts`, `storebro info` |
 
 Out of scope for v1.0 (likely v1.1+): propulsion + systems, render pipeline,
