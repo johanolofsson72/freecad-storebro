@@ -1,0 +1,434 @@
+-- allium: 3
+--
+-- Deck module specification (formal). Derived from specs/003-deck-module/spec.md
+-- after /speckit-clarify (5 auto-picked clarifications applied). Full pipeline track
+-- per .claude/rules/specs.md.
+--
+-- Constitutional principles that govern this module (.specify/memory/constitution.md):
+--   I.   Parametric Everything       (every dim is a named param with default)
+--   II.  Reproducibility             (structural determinism; export 002 handles bytes)
+--   III. FreeCAD-Idiomatic           (Part / PartDesign / Sketcher — no raw mesh)
+--   IV.  Reference Fidelity          (defaults match RC34 1972 ±1% on citation-grade)
+--   VII. FreeCAD Version Discipline  (lazy first-call version check, shared helper)
+--
+-- This is the FIRST non-leaf module in the project — it consumes Hull from
+-- storebro.hull. FR-011 permits that single import while still banning
+-- storebro.interior, storebro.export, storebro.cli.
+
+-- ===== External entities =====
+-- Source: spec 001 (storebro.hull) for Hull + HullParameters;
+-- FreeCAD 1.1+ Python API for the rest.
+
+external entity Hull {
+    label: String
+    document: FreeCADDocument
+    body: FreeCADBody
+    parameters: HullParameters
+}
+
+external entity HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    freeboard: Decimal
+    sheer_height_aft: Decimal
+    sheer_height_fwd: Decimal
+}
+
+external entity FreeCADDocument {
+    name: String
+    is_active: Boolean
+}
+
+external entity FreeCADBody {
+    label: String
+    document: FreeCADDocument
+    volume: Decimal
+    bbox_length: Decimal
+    bbox_width: Decimal
+    bbox_height: Decimal
+    is_parametric_in_gui: Boolean
+    is_closed_shell: Boolean
+    is_symmetric_about_centerline: Boolean
+}
+
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+}
+
+-- ===== Configuration =====
+
+config {
+    reference_fidelity_tolerance_pct: Decimal = 1.0
+    build_budget_seconds: Decimal = 45.0
+    min_invalid_input_test_cases: Integer = 7
+    supported_freecad_min_major: Integer = 1
+    supported_freecad_min_minor: Integer = 1
+
+    -- Default deck dimensions (estimate-grade except where noted)
+    default_deck_plate_thickness_m: Decimal = 0.025
+    default_cabin_trunk_length_m: Decimal = 4.50         -- estimate
+    default_cabin_trunk_fwd_offset_m: Decimal = 2.00     -- estimate
+    default_cabin_trunk_width_m: Decimal = 2.20          -- estimate
+    default_cabin_trunk_height_m: Decimal = 1.20         -- estimate
+    default_cabin_trunk_corner_radius_m: Decimal = 0.075 -- clarify Q3
+    default_windshield_rake_deg: Decimal = 25.0          -- estimate
+    default_hardtop_length_m: Decimal = 3.50             -- estimate
+    default_hardtop_height_m: Decimal = 0.10             -- above cabin trunk top
+    default_hardtop_overhang_fwd_m: Decimal = 0.20
+    default_hardtop_overhang_aft_m: Decimal = 0.40
+    default_hardtop_pillar_diameter_m: Decimal = 0.04    -- clarify Q2
+    default_railing_height_m: Decimal = 0.65             -- estimate
+    default_deck_side_walkway_m: Decimal = 0.40          -- estimate
+
+    -- Valid ranges
+    max_windshield_rake_deg: Decimal = 60.0
+    sheer_alignment_tolerance_m: Decimal = 0.000001      -- SC-009: 1e-6 m
+}
+
+-- ===== Value object: deck parameters =====
+
+value DeckParameters {
+    deck_plate_thickness: Decimal
+    cabin_trunk_length: Decimal
+    cabin_trunk_fwd_offset: Decimal
+    cabin_trunk_width: Decimal
+    cabin_trunk_height: Decimal
+    cabin_trunk_corner_radius: Decimal
+    windshield_rake: Decimal
+    hardtop_length: Decimal
+    hardtop_height: Decimal
+    hardtop_overhang_fwd: Decimal
+    hardtop_overhang_aft: Decimal
+    hardtop_pillar_diameter: Decimal
+    railing_height: Decimal
+    deck_side_walkway: Decimal
+
+    -- FR-004 + Edge Cases: positivity
+    invariant PositiveDeckPlateThickness  { this.deck_plate_thickness > 0 }
+    invariant PositiveCabinLength         { this.cabin_trunk_length > 0 }
+    invariant PositiveCabinWidth          { this.cabin_trunk_width > 0 }
+    invariant PositiveCabinHeight         { this.cabin_trunk_height > 0 }
+    invariant NonNegativeCabinCornerRadius { this.cabin_trunk_corner_radius >= 0 }
+    invariant NonNegativeCabinOffset      { this.cabin_trunk_fwd_offset >= 0 }
+    invariant PositiveHardtopLength       { this.hardtop_length > 0 }
+    invariant NonNegativeHardtopHeight    { this.hardtop_height >= 0 }
+    invariant NonNegativeHardtopOverhangFwd { this.hardtop_overhang_fwd >= 0 }
+    invariant NonNegativeHardtopOverhangAft { this.hardtop_overhang_aft >= 0 }
+    invariant PositivePillarDiameter      { this.hardtop_pillar_diameter > 0 }
+    invariant PositiveRailingHeight       { this.railing_height > 0 }
+    invariant PositiveSideWalkway         { this.deck_side_walkway > 0 }
+
+    -- FR-008 + Edge Cases: angular range
+    invariant WindshieldRakeInRange {
+        this.windshield_rake >= 0 and this.windshield_rake <= 60
+    }
+
+    -- FR-012 + Edge Cases: intra-deck geometric impossibilities
+    invariant HardtopOverhangFitsLength {
+        this.hardtop_overhang_fwd + this.hardtop_overhang_aft < this.hardtop_length
+    }
+}
+
+-- ===== Exception entities (FR-015, public deck module API) =====
+
+entity DeckParameterError {
+    parameter_name: String
+    parameter_value: String?
+    valid_range: String
+    message: String
+}
+
+entity DeckConstructionError {
+    parameters: DeckParameters?
+    hull: Hull?
+    underlying_message: String
+    detected_version: FreeCADVersion?
+    supported_range: String?
+}
+
+-- ===== Sub-Body entities (the six elements per FR-001) =====
+
+entity DeckPlate {
+    body: FreeCADBody
+    thickness: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant SolidWithThickness       { this.body.volume > 0 and this.thickness > 0 }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+}
+
+entity CabinTrunk {
+    body: FreeCADBody
+    length: Decimal
+    width: Decimal
+    height: Decimal
+    corner_radius: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant SolidShell               { this.body.is_closed_shell = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+}
+
+entity Windshield {
+    body: FreeCADBody
+    rake_degrees: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+}
+
+entity Hardtop {
+    body: FreeCADBody
+    length: Decimal
+    height_above_cabin: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+}
+
+-- FR-001: single Body containing both port + starboard pillars (mirrored
+-- per FR-009). Clarify Q2 resolution.
+entity HardtopPillars {
+    body: FreeCADBody
+    pillar_diameter: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+    invariant TwoPillarsPresent        { this.body.volume > 0 }
+}
+
+entity Railings {
+    body: FreeCADBody
+    height: Decimal
+
+    invariant SymmetricAboutCenterline { this.body.is_symmetric_about_centerline = true }
+    invariant ParametricInGUI          { this.body.is_parametric_in_gui = true }
+}
+
+-- ===== Return aggregate =====
+
+entity Deck {
+    parameters: DeckParameters
+    hull: Hull
+    document: FreeCADDocument
+    label: String
+    build_duration_seconds: Decimal
+
+    deck_plate: DeckPlate
+    cabin_trunk: CabinTrunk
+    windshield: Windshield
+    hardtop: Hardtop
+    hardtop_pillars: HardtopPillars
+    railings: Railings
+
+    -- SC-002: 45-second per-deck budget on a developer laptop
+    invariant WithinBuildBudget { this.build_duration_seconds <= 45 }
+
+    -- FR-016: document equals hull.document
+    invariant DocumentMatchesHull { this.document = this.hull.document }
+}
+
+-- ===== Rules =====
+
+-- FR-001 + FR-002 + FR-016 + FR-017: the public builder
+rule BuildDeck {
+    when: BuildDeck(hull, parameters, document, name)
+
+    -- FR-013 (lazy version check)
+    requires:
+        FreeCADVersion.major >= 1 and FreeCADVersion.minor >= 1
+
+    -- FR-004 + Edge Cases: parameter + hull-compatibility validation BEFORE FreeCAD
+    requires:
+        parameters.cabin_trunk_length > 0
+        parameters.cabin_trunk_length < hull.parameters.loa
+        parameters.cabin_trunk_fwd_offset >= 0
+        parameters.cabin_trunk_fwd_offset + parameters.cabin_trunk_length <= hull.parameters.loa
+        parameters.cabin_trunk_width > 0
+        parameters.cabin_trunk_width + 2 * parameters.deck_side_walkway <= hull.parameters.beam_max
+        parameters.cabin_trunk_height > 0
+        parameters.windshield_rake >= 0
+        parameters.windshield_rake <= 60
+        parameters.hardtop_length > 0
+        parameters.hardtop_overhang_fwd + parameters.hardtop_overhang_aft < parameters.hardtop_length
+        parameters.railing_height > 0
+        parameters.deck_plate_thickness > 0
+        parameters.hardtop_pillar_diameter > 0
+        parameters.cabin_trunk_corner_radius >= 0
+
+    ensures:
+        let target_doc = document ?? hull.document
+        Deck.created(
+            parameters: parameters,
+            hull: hull,
+            document: target_doc,
+            label: name ?? "Deck"
+        )
+}
+
+-- FR-019 + Edge Cases: hull with null/empty shape rejected
+rule RejectHullWithEmptyShape {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        hull = null or hull.body.is_closed_shell = false
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-004 + FR-015 + Edge Cases: cabin trunk longer than hull
+rule RejectCabinLongerThanHull {
+    when: BuildDeck(hull, parameters, document, name)
+    requires: parameters.cabin_trunk_length >= hull.parameters.loa
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-004 + Edge Cases: cabin trunk past bow
+rule RejectCabinPastBow {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        parameters.cabin_trunk_fwd_offset + parameters.cabin_trunk_length > hull.parameters.loa
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-004 + Edge Cases: cabin wider than hull beam minus side walkways
+rule RejectCabinTooWide {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        parameters.cabin_trunk_width + 2 * parameters.deck_side_walkway > hull.parameters.beam_max
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-012 + Edge Cases: hardtop overhang collapses
+rule RejectHardtopOverhangTooLarge {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        parameters.hardtop_overhang_fwd + parameters.hardtop_overhang_aft >= parameters.hardtop_length
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-008 + Edge Cases: windshield rake out of range
+rule RejectWindshieldRakeOutOfRange {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        parameters.windshield_rake < 0 or parameters.windshield_rake > 60
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-016: caller-supplied document must equal hull.document
+rule RejectDocumentMismatch {
+    when: BuildDeck(hull, parameters, document, name)
+    requires: document != null and document != hull.document
+    ensures: DeckParameterError.raised()
+}
+
+-- FR-013 + FR-015: unsupported FreeCAD version
+rule RejectUnsupportedFreeCADVersion {
+    when: BuildDeck(hull, parameters, document, name)
+    requires:
+        FreeCADVersion.major < 1
+        or (FreeCADVersion.major = 1 and FreeCADVersion.minor < 1)
+    ensures: DeckConstructionError.raised()
+}
+
+-- FR-015 + FR-018 + Edge Cases: FreeCAD-side failure mid-build → rollback +
+-- wrap in DeckConstructionError. The rollback is the key SC-008 invariant.
+rule WrapFreeCADConstructionFailure {
+    when: FreeCADConstructionFailure(hull, parameters)
+    ensures: DeckConstructionError.raised()
+}
+
+-- ===== Global invariants =====
+
+-- FR-005 + SC-003: structural determinism
+invariant StructuralDeterminism {
+    for d in Deck:
+        d.deck_plate.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "deck_plate")
+        and d.cabin_trunk.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "cabin_trunk")
+        and d.windshield.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "windshield")
+        and d.hardtop.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "hardtop")
+        and d.hardtop_pillars.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "hardtop_pillars")
+        and d.railings.body.volume = Deck.canonical_volume_for(d.parameters, d.hull, "railings")
+}
+
+-- SC-001 + Constitution IV: default deck matches RC34 1972 within ±1%.
+-- Exact reference values pinned in /speckit-plan (see open question below).
+invariant DefaultDeckMatchesReferenceFidelity {
+    let defaults = DeckParameters.canonical_defaults
+    let d = Deck.canonical_for(defaults, Hull.canonical_default)
+    abs(d.cabin_trunk.length - ReferenceStorebro.cabin_trunk_length) / ReferenceStorebro.cabin_trunk_length <= 0.01
+    and abs(d.hardtop.length - ReferenceStorebro.hardtop_length) / ReferenceStorebro.hardtop_length <= 0.01
+    and abs(d.railings.height - ReferenceStorebro.railing_height) / ReferenceStorebro.railing_height <= 0.01
+}
+
+-- FR-009: every sub-Body is symmetric about the centerline
+invariant AllSubBodiesSymmetric {
+    for d in Deck:
+        d.deck_plate.body.is_symmetric_about_centerline = true
+        and d.cabin_trunk.body.is_symmetric_about_centerline = true
+        and d.windshield.body.is_symmetric_about_centerline = true
+        and d.hardtop.body.is_symmetric_about_centerline = true
+        and d.hardtop_pillars.body.is_symmetric_about_centerline = true
+        and d.railings.body.is_symmetric_about_centerline = true
+}
+
+-- FR-010 + SC-009: deck plate underside aligns with hull sheer line.
+-- Strict bar (1 µm) applies once v0.2.0 PartDesign + Shape-sampling upgrade lands.
+-- For v0.3.0-alpha, the relaxed bar is "deck plate top-Z lies within the
+-- hull's sheer-line vertical extent" — see spec.md SC-009 revision.
+invariant DeckPlateAlignsSheerLine {
+    for d in Deck:
+        Topology.deck_plate_top_z(d) >= Topology.hull_sheer_min_z(d.hull)
+        and Topology.deck_plate_top_z(d) <= Topology.hull_sheer_max_z(d.hull)
+}
+
+-- FR-011: leaf-to-hull-only; export, interior, cli are forbidden imports.
+-- Importing storebro.hull is permitted (we consume the Hull type).
+invariant DeckImportsHullOnly {
+    Module.imports("storebro.deck", "storebro.hull") = true
+    and not Module.imports("storebro.deck", "storebro.interior")
+    and not Module.imports("storebro.deck", "storebro.export")
+    and not Module.imports("storebro.deck", "storebro.cli")
+}
+
+-- Constitution III + FR-006: no raw mesh inside the deck module
+invariant NoMeshInDeckModule {
+    not Module.uses("storebro.deck", "Mesh.Mesh")
+}
+
+-- SC-006: every public sub-Body and every public function has a geometry test
+invariant TestCoverageOnPublicSurface {
+    for f in Module.public_functions("storebro.deck"):
+        Tests.has_geometry_property_test(f)
+}
+
+-- SC-007: validation error messages cite parameter, value, range
+invariant ValidationErrorMessageFormat {
+    for e in DeckParameterError:
+        e.message_contains(e.parameter_name)
+        and e.message_contains(e.valid_range)
+}
+
+-- SC-008: failed builds leave NO partial geometry in the user's document
+invariant NoPartialDeckOnFailure {
+    for failure in FreeCADConstructionFailure:
+        Document.bodies_added_during(failure).count = 0
+}
+
+-- ===== Open questions and deferred items =====
+
+open question "Exact canonical default values for the 14 deck parameters (cabin_trunk_length, cabin_trunk_fwd_offset, hardtop_length, hardtop_height, hardtop_overhang_fwd/aft, hardtop_pillar_diameter, railing_height, deck_side_walkway, windshield_rake, cabin_trunk_corner_radius, deck_plate_thickness) are estimate-grade in spec.md. /speckit-plan will pin specific values from docs/references/ (citation-grade for cabin_trunk_length, hardtop_length, railing_height; estimate-grade for the others). The DefaultDeckMatchesReferenceFidelity invariant becomes verifiable once the citation-grade set is pinned."
+
+deferred Deck.glazing
+-- Cabin trunk window cutouts (deadlights, portholes, opening hatches) deferred to
+-- v1.1+ per clarify Q1. v1.0 ships solid sides + solid windshield face.
+
+deferred Railings.stanchion_and_rail
+-- Discrete stanchion + rail railings deferred to v1.1+. v1.0 ships continuous
+-- perimeter rail loops only.
+
+deferred Deck.fly_bridge
+deferred Deck.swim_platform
+deferred Deck.anchor_pulpit
+deferred Deck.transom_door
+-- All non-core superstructure elements deferred to v1.1+ or downstream specs.
