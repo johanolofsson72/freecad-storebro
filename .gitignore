@@ -38,5 +38,9 @@ htmlcov/
 *.FCBak
 *.lock
 
-# Generated signoff artifacts (per quickstart.md / T033)
+# Generated signoff artifacts (per quickstart.md / T033 + spec 006 T023)
 /tmp/storebro_hull_signoff_*.FCStd
+storebro_v*_signoff.FCStd
+storebro_v*_signoff.step
+storebro_v*_signoff.stl
+storebro_v*_signoff.brep
