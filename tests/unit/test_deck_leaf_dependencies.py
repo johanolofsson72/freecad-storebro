@@ -27,9 +27,7 @@ def test_deck_imports_hull() -> None:
             if module.startswith("storebro.hull"):
                 found_hull_import = True
                 break
-    assert found_hull_import, (
-        "FR-011 expectation: deck.py must import storebro.hull"
-    )
+    assert found_hull_import, "FR-011 expectation: deck.py must import storebro.hull"
 
 
 def test_deck_does_not_import_forbidden_siblings() -> None:
@@ -48,6 +46,5 @@ def test_deck_does_not_import_forbidden_siblings() -> None:
                 for sibling in FORBIDDEN_PUBLIC_SIBLINGS:
                     forbidden = f"storebro.{sibling}"
                     assert not alias.name.startswith(forbidden), (
-                        f"FR-011 violation: deck.py:{node.lineno} imports "
-                        f"{alias.name!r}"
+                        f"FR-011 violation: deck.py:{node.lineno} imports {alias.name!r}"
                     )

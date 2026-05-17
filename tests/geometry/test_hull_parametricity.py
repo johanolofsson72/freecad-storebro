@@ -32,7 +32,7 @@ def _perturb(params: HullParameters, field_name: str, ratio: float) -> HullParam
     "field_name,bbox_index,direction_up_ratio",
     [
         # (field, bbox dimension index, ratio used to drive that dim up)
-        ("loa", 0, 1.10),       # +10% LOA → longer bbox
+        ("loa", 0, 1.10),  # +10% LOA → longer bbox
         ("beam_max", 1, 1.10),  # +10% beam → wider bbox
     ],
 )

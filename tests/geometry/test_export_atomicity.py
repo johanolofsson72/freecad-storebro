@@ -20,14 +20,12 @@ def _no_partial_file(target: Path, prefix_pattern: str) -> None:
     assert leftovers == [], f"FR-008 violation: leftover tmp files {leftovers}"
 
 
-def test_step_freecad_failure_no_partial(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_step_freecad_failure_no_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import Part  # type: ignore[import-not-found]
 
-    monkeypatch.setattr(Part, "export", lambda *a, **k: (_ for _ in ()).throw(
-        RuntimeError("forced (test)")
-    ))
+    monkeypatch.setattr(
+        Part, "export", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("forced (test)"))
+    )
     hull = build_hull()
     out = tmp_path / "fail.step"
     with pytest.raises(ExportWriteError):
@@ -35,9 +33,7 @@ def test_step_freecad_failure_no_partial(
     _no_partial_file(out, ".fail.step.*")
 
 
-def test_brep_freecad_failure_no_partial(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_brep_freecad_failure_no_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hull = build_hull()
     out = tmp_path / "fail.brep"
 
@@ -58,9 +54,7 @@ def test_brep_freecad_failure_no_partial(
     _no_partial_file(out, ".fail.brep.*")
 
 
-def test_stl_meshing_failure_no_partial(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stl_meshing_failure_no_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hull = build_hull()
     out = tmp_path / "fail.stl"
 

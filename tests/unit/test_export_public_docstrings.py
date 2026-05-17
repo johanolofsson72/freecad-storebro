@@ -30,6 +30,4 @@ def test_every_public_name_has_docstring_example() -> None:
         doc = inspect.getdoc(obj)
         if not _doc_has_example(doc):
             missing_example.append(name)
-    assert not missing_example, (
-        f"FR-015 violation: missing >>> example block on {missing_example}"
-    )
+    assert not missing_example, f"FR-015 violation: missing >>> example block on {missing_example}"

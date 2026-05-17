@@ -194,19 +194,13 @@ def _validate_hull_parameters(p: HullParameters) -> None:
 
     # Angular ranges (FR-008 + Edge Cases)
     if not (0.0 <= p.deadrise_amidships <= 30.0):
-        raise HullParameterError(
-            "deadrise_amidships", p.deadrise_amidships, "[0, 30] degrees"
-        )
+        raise HullParameterError("deadrise_amidships", p.deadrise_amidships, "[0, 30] degrees")
     if not (0.0 <= p.transom_angle <= 45.0):
-        raise HullParameterError(
-            "transom_angle", p.transom_angle, "[0, 45] degrees"
-        )
+        raise HullParameterError("transom_angle", p.transom_angle, "[0, 45] degrees")
 
     # Cross-field geometric impossibility (FR-012 + Edge Cases)
     if p.loa <= p.beam_max:
-        raise HullParameterError(
-            "loa<>beam_max", None, "loa must exceed beam_max"
-        )
+        raise HullParameterError("loa<>beam_max", None, "loa must exceed beam_max")
     if p.sheer_height_fwd < p.sheer_height_aft:
         raise HullParameterError(
             "sheer_height_fwd<>sheer_height_aft",
@@ -347,9 +341,7 @@ def _resolve_body_label(name: str | None) -> str:
     return name if name is not None else "Hull"
 
 
-def _create_station_sketch(
-    profile: _StationProfile, body: Any, parent_doc: Any
-) -> Any:
+def _create_station_sketch(profile: _StationProfile, body: Any, parent_doc: Any) -> Any:
     """Create a FreeCAD Sketch describing one station's half-section.
 
     The sketch lives on the YZ plane translated to ``profile.x_position``.
@@ -401,9 +393,7 @@ def _create_station_sketch(
     return sketch
 
 
-def _apply_loft_and_mirror(
-    body: Any, sketches: list[Any], parent_doc: Any
-) -> None:
+def _apply_loft_and_mirror(body: Any, sketches: list[Any], parent_doc: Any) -> None:
     """Apply the loft + mirror operations that close the hull shell.
 
     Constructs a Part::Loft solid through the five station sketches in order

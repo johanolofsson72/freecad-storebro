@@ -13,6 +13,7 @@ Example:
     >>> # build_hull() requires FreeCAD 1.1+ on this host; see README.md.
 """
 
+from storebro.cli import main
 from storebro.deck import (
     Deck,
     DeckConstructionError,
@@ -43,7 +44,7 @@ from storebro.interior import (
     build_interior,
 )
 
-__version__ = "0.4.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "Deck",
@@ -68,4 +69,5 @@ __all__ = [
     "export_fcstd",
     "export_step",
     "export_stl",
+    "main",
 ]

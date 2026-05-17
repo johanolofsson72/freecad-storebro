@@ -73,9 +73,7 @@ class DeckParameterError(ValueError):
         self.parameter_value = parameter_value
         self.valid_range = valid_range
         if parameter_value is None:
-            message = (
-                f"DeckParameterError: invalid {parameter_name} — {valid_range}"
-            )
+            message = f"DeckParameterError: invalid {parameter_name} — {valid_range}"
         else:
             message = (
                 f"DeckParameterError: {parameter_name} = {parameter_value!r} "
@@ -217,9 +215,7 @@ def _validate_deck_parameters(p: DeckParameters) -> None:
 
     # Angular range
     if not (0.0 <= p.windshield_rake <= 60.0):
-        raise DeckParameterError(
-            "windshield_rake", p.windshield_rake, "[0, 60] degrees"
-        )
+        raise DeckParameterError("windshield_rake", p.windshield_rake, "[0, 60] degrees")
 
     # Intra-deck cross-field: hardtop overhangs must fit length
     if p.hardtop_overhang_fwd + p.hardtop_overhang_aft >= p.hardtop_length:
@@ -350,9 +346,7 @@ def _validate_hull(hull: Hull | None) -> None:
         raise DeckParameterError("hull", None, "must not be None")
     body = getattr(hull, "body", None)
     if body is None:
-        raise DeckParameterError(
-            "hull", None, "Hull object has no `.body` attribute"
-        )
+        raise DeckParameterError("hull", None, "Hull object has no `.body` attribute")
     shape = getattr(body, "Shape", None)
     if shape is None or getattr(shape, "isNull", lambda: True)():
         raise DeckParameterError(
@@ -362,9 +356,7 @@ def _validate_hull(hull: Hull | None) -> None:
         )
 
 
-def _validate_cross_hull_constraints(
-    hull: Hull, parameters: DeckParameters
-) -> None:
+def _validate_cross_hull_constraints(hull: Hull, parameters: DeckParameters) -> None:
     """FR-004 + FR-012: validate parameters against hull dimensions.
 
     These checks live in :func:`build_deck` (not in DeckParameters.__post_init__)
@@ -384,10 +376,7 @@ def _validate_cross_hull_constraints(
             None,
             "cabin_trunk_fwd_offset + cabin_trunk_length must not exceed hull.parameters.loa",
         )
-    if (
-        parameters.cabin_trunk_width + 2 * parameters.deck_side_walkway
-        > hp.beam_max
-    ):
+    if parameters.cabin_trunk_width + 2 * parameters.deck_side_walkway > hp.beam_max:
         raise DeckParameterError(
             "cabin_trunk_width+walkways<>hull.beam_max",
             None,
@@ -453,19 +442,17 @@ def _sample_hull_sheer(hull: Hull) -> list[tuple[float, float, float]]:
     half_beams = [
         half_beam_max * 0.70,  # Transom
         half_beam_max * 0.92,  # Aft
-        half_beam_max,         # Amidships
+        half_beam_max,  # Amidships
         half_beam_max * 0.55,  # Fwd
-        0.0,                   # Stem (collapses to vertex)
+        0.0,  # Stem (collapses to vertex)
     ]
+
     # Sheer height linearly interpolates between aft and fwd.
     def sheer_z(t: float) -> float:
         return hp.sheer_height_aft + t * (hp.sheer_height_fwd - hp.sheer_height_aft)
 
     fractions = [0.0, 0.25, 0.50, 0.75, 1.0]
-    return [
-        (stations[i], half_beams[i], sheer_z(fractions[i]))
-        for i in range(5)
-    ]
+    return [(stations[i], half_beams[i], sheer_z(fractions[i])) for i in range(5)]
 
 
 # ---------------------------------------------------------------------------
@@ -651,9 +638,7 @@ def _build_hardtop(
 
     rect = Part.makePlane(parameters.hardtop_length, hardtop_width)
     solid = rect.extrude(FreeCAD.Vector(0, 0, slab_thickness))
-    solid.translate(
-        FreeCAD.Vector(hardtop_fwd_x, -hardtop_width / 2.0, hardtop_z)
-    )
+    solid.translate(FreeCAD.Vector(hardtop_fwd_x, -hardtop_width / 2.0, hardtop_z))
     _ = hardtop_aft_x  # used for documentation; aft pillar X derived from this elsewhere
 
     obj = target_doc.addObject("Part::Feature", "Deck_Hardtop")
@@ -747,8 +732,7 @@ def _build_railings(
     loop_pts = points_port + points_starboard[1:-1] + [points_port[0]]
 
     edges = [
-        Part.LineSegment(loop_pts[i], loop_pts[i + 1]).toShape()
-        for i in range(len(loop_pts) - 1)
+        Part.LineSegment(loop_pts[i], loop_pts[i + 1]).toShape() for i in range(len(loop_pts) - 1)
     ]
     wire = Part.Wire(edges)
 
@@ -765,17 +749,15 @@ def _build_railings(
     # the wire upward (this produces a "rail height ribbon" approximation
     # adequate for the v0.3.0-alpha bbox / parametricity tests).
     rail_face = Part.Face(wire) if wire.isClosed() else None
-    rail_body = (
-        rail_face.extrude(FreeCAD.Vector(0, 0, 0.01))
-        if rail_face is not None
-        else wire
-    )
+    rail_body = rail_face.extrude(FreeCAD.Vector(0, 0, 0.01)) if rail_face is not None else wire
 
     obj = target_doc.addObject("Part::Feature", "Deck_Railings")
     obj.Shape = rail_body
     added.append(obj)
 
-    obj.addProperty("App::PropertyLength", "RailingHeight", "Deck", "Railing height above deck plate")
+    obj.addProperty(
+        "App::PropertyLength", "RailingHeight", "Deck", "Railing height above deck plate"
+    )
     obj.RailingHeight = parameters.railing_height * 1000.0
 
     return Railings(body=obj, height=parameters.railing_height)
@@ -856,8 +838,7 @@ def build_deck(
     except BaseException as exc:
         _rollback(target_doc, added)
         raise DeckConstructionError(
-            f"build_deck failed during sub-Body construction — "
-            f"{type(exc).__name__}: {exc}",
+            f"build_deck failed during sub-Body construction — {type(exc).__name__}: {exc}",
             parameters=resolved_params,
             hull=hull,
             underlying=exc,

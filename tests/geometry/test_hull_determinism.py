@@ -27,9 +27,7 @@ def test_two_builds_yield_identical_volume_and_bbox() -> None:
         h1 = build_hull(params, document=doc1)
         h2 = build_hull(params, document=doc2)
 
-        assert _close(h1.volume, h2.volume), (
-            f"volume drift: {h1.volume} vs {h2.volume}"
-        )
+        assert _close(h1.volume, h2.volume), f"volume drift: {h1.volume} vs {h2.volume}"
 
         for i, name in enumerate(("length", "width", "height")):
             assert _close(h1.bbox[i], h2.bbox[i]), (

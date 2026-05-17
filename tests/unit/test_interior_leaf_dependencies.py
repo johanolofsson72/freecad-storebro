@@ -14,9 +14,7 @@ from pathlib import Path
 FORBIDDEN_PUBLIC_SIBLINGS = ["export", "cli"]
 EXPECTED_IMPORTS = {"storebro.hull", "storebro.deck"}
 
-INTERIOR_SOURCE = (
-    Path(__file__).parent.parent.parent / "src" / "storebro" / "interior.py"
-)
+INTERIOR_SOURCE = Path(__file__).parent.parent.parent / "src" / "storebro" / "interior.py"
 
 
 def test_interior_imports_hull_and_deck() -> None:
@@ -30,9 +28,7 @@ def test_interior_imports_hull_and_deck() -> None:
                 if module.startswith(expected):
                     found.add(expected)
     missing = EXPECTED_IMPORTS - found
-    assert not missing, (
-        f"FR-011: interior.py must import {EXPECTED_IMPORTS}, missing: {missing}"
-    )
+    assert not missing, f"FR-011: interior.py must import {EXPECTED_IMPORTS}, missing: {missing}"
 
 
 def test_interior_does_not_import_forbidden_siblings() -> None:
@@ -50,6 +46,5 @@ def test_interior_does_not_import_forbidden_siblings() -> None:
                 for sibling in FORBIDDEN_PUBLIC_SIBLINGS:
                     forbidden = f"storebro.{sibling}"
                     assert not alias.name.startswith(forbidden), (
-                        f"FR-011 violation: interior.py:{node.lineno} "
-                        f"imports {alias.name!r}"
+                        f"FR-011 violation: interior.py:{node.lineno} imports {alias.name!r}"
                     )

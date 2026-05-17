@@ -81,9 +81,7 @@ class ExportInputError(ValueError):
         if offending_value is None:
             message = f"ExportInputError: {field} — {reason}"
         else:
-            message = (
-                f"ExportInputError: {field} — {reason} (got: {offending_value})"
-            )
+            message = f"ExportInputError: {field} — {reason} (got: {offending_value})"
         super().__init__(message)
 
 
@@ -327,16 +325,12 @@ def _sorted_subshapes(shape: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 _STEP_FILE_NAME_RE = re.compile(rb"^FILE_NAME\s*\([^)]*\)\s*;", re.MULTILINE)
-_STEP_FILE_DESCRIPTION_RE = re.compile(
-    rb"^FILE_DESCRIPTION\s*\([^)]*\)\s*;", re.MULTILINE
-)
+_STEP_FILE_DESCRIPTION_RE = re.compile(rb"^FILE_DESCRIPTION\s*\([^)]*\)\s*;", re.MULTILINE)
 _STEP_FIXED_FILE_NAME = (
     b"FILE_NAME('','1980-01-01T00:00:00',('freecad-storebro'),('freecad-storebro'),"
     b"'freecad-storebro','freecad-storebro','');"
 )
-_STEP_FIXED_FILE_DESCRIPTION = (
-    b"FILE_DESCRIPTION(('freecad-storebro export'),'2;1');"
-)
+_STEP_FIXED_FILE_DESCRIPTION = b"FILE_DESCRIPTION(('freecad-storebro export'),'2;1');"
 
 
 def _set_step_schema_to_ap214() -> None:
@@ -347,9 +341,7 @@ def _set_step_schema_to_ap214() -> None:
     """
     import FreeCAD
 
-    pref = FreeCAD.ParamGet(
-        "User parameter:BaseApp/Preferences/Mod/Import/hSTEP"
-    )
+    pref = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Import/hSTEP")
     if pref.GetString("Scheme", "") != "AP214CD":
         pref.SetString("Scheme", "AP214CD")
 
@@ -357,9 +349,7 @@ def _set_step_schema_to_ap214() -> None:
 def _canonicalize_step_header(raw_bytes: bytes) -> bytes:
     """Scrub the STEP HEADER section to fix timestamps + originator metadata."""
     body = _STEP_FILE_NAME_RE.sub(_STEP_FIXED_FILE_NAME, raw_bytes, count=1)
-    body = _STEP_FILE_DESCRIPTION_RE.sub(
-        _STEP_FIXED_FILE_DESCRIPTION, body, count=1
-    )
+    body = _STEP_FILE_DESCRIPTION_RE.sub(_STEP_FIXED_FILE_DESCRIPTION, body, count=1)
     return body.replace(b"\r\n", b"\n")
 
 
@@ -499,9 +489,7 @@ def _check_watertight(mesh: Any, format_label: str, target_path: Path) -> None:
     """Raise ExportWriteError if the mesh fails the SC-008 watertight check."""
     is_solid = bool(mesh.isSolid())
     non_manifolds = bool(getattr(mesh, "hasNonManifolds", lambda: False)())
-    self_intersects = bool(
-        getattr(mesh, "hasSelfIntersections", lambda: False)()
-    )
+    self_intersects = bool(getattr(mesh, "hasSelfIntersections", lambda: False)())
     if (not is_solid) or non_manifolds or self_intersects:
         raise ExportWriteError(
             "mesh is not watertight — "

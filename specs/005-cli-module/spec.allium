@@ -1,0 +1,275 @@
+-- allium: 3
+--
+-- CLI module specification (formal). Derived from specs/005-cli-module/spec.md
+-- after /speckit-clarify (4 auto-picked clarifications applied). Full pipeline
+-- track per .claude/rules/specs.md.
+--
+-- Constitutional principles that govern this module:
+--   I.   Parametric Everything       (every CLI arg is a named option)
+--   II.  Reproducibility             (delegates to spec 002 SHA-256 determinism)
+--   V.   Test-Gated Releases         (tests for every subcommand + exit code)
+--   VI.  Public OSS by Default       (console script + python -m form)
+--
+-- This is the dependency-arrow apex: the only public module that imports all
+-- four prior public modules (hull, deck, interior, export) + the shared
+-- internal _freecad_check helper.
+
+-- ===== Enums =====
+
+enum Subcommand { build | list_layouts | info }
+enum BuildFormat { fcstd | step | stl | brep }
+
+-- ===== External entities =====
+
+external entity Hull {
+    label: String
+    body: FreeCADBody
+    parameters: HullParameters
+    document: FreeCADDocument
+}
+
+external entity Deck {
+    label: String
+    hull: Hull
+    document: FreeCADDocument
+}
+
+external entity Interior {
+    layout: LayoutSpec
+    hull: Hull
+    deck: Deck
+    document: FreeCADDocument
+}
+
+external entity LayoutSpec {
+    layout_name: String
+    source: String
+}
+
+external entity ExportArtifact {
+    target_path: String
+    format: BuildFormat
+    byte_count: Integer
+    sha256: String
+    build_duration_seconds: Decimal
+}
+
+external entity HullParameters { loa: Decimal }
+external entity FreeCADBody    { volume: Decimal }
+external entity FreeCADDocument { name: String }
+external entity FreeCADVersion {
+    major: Integer
+    minor: Integer
+    patch: Integer
+}
+
+external entity OperatingSystem {
+    system: String
+    machine: String
+}
+
+-- IO surfaces (process-level)
+external entity Stdout { content: String }
+external entity Stderr { content: String }
+external entity ProcessExit { code: Integer }
+external entity Cli {
+    debug_flag_set: Boolean
+}
+
+-- ===== Config =====
+
+config {
+    canonical_layout_count: Integer = 5
+    success_exit_code: Integer = 0
+    input_error_exit_code: Integer = 1
+    system_error_exit_code: Integer = 2
+    default_layout_name: String = "Alternativ3"
+    default_format: String = "fcstd"
+    default_tessellation_m: Decimal = 0.001
+    list_layouts_budget_seconds: Decimal = 1.0
+    info_budget_seconds: Decimal = 1.0
+    build_budget_seconds: Decimal = 180.0
+    min_invalid_input_test_cases: Integer = 8
+}
+
+-- ===== Value objects =====
+
+value BuildArgs {
+    layout: String
+    out_path: String
+    format: BuildFormat
+    overwrite: Boolean
+    tessellation: Decimal
+
+    invariant ValidTessellation { this.tessellation > 0 }
+    invariant ValidFormat { this.format = fcstd or this.format = step or this.format = stl or this.format = brep }
+}
+
+value CliInvocation {
+    subcommand: Subcommand
+    debug: Boolean
+    build_args: BuildArgs?
+}
+
+-- ===== Rules =====
+
+-- FR-002 + FR-010: top-level dispatch
+rule DispatchSubcommand {
+    when: RunCli(argv)
+    ensures:
+        let invocation = CliInvocation.parsed_from(argv)
+        if invocation.subcommand = build:
+            BuildPipeline.run(invocation.build_args)
+        if invocation.subcommand = list_layouts:
+            ListLayouts.run()
+        if invocation.subcommand = info:
+            Info.run()
+}
+
+-- FR-002 + argparse convention: unknown subcommand
+rule RejectUnknownSubcommand {
+    when: RunCli(argv)
+    requires:
+        Cli.is_unknown_subcommand(argv) = true
+        argv.count > 0
+    ensures:
+        ProcessExit.code = 2
+        Stderr.content_contains("usage")
+}
+
+-- FR-003 + FR-004 + FR-005: build pipeline composition
+rule BuildPipeline {
+    when: BuildPipelineRun(args)
+    requires:
+        args.out_path != null
+        args.tessellation > 0
+    ensures:
+        let hull = Hull.built_with_defaults()
+        let deck = Deck.built_on(hull)
+        let interior = Interior.built_on(hull, deck, args.layout)
+        let artifact = Export.write(args.format, hull, deck, interior, args.out_path, args.overwrite, args.tessellation)
+        ProcessExit.code = 0
+        Stdout.content_contains("wrote ")
+        Stdout.content_contains(artifact.sha256)
+}
+
+-- FR-005 + FR-011: input-error exit code
+rule HandleInputError {
+    when: ExceptionRaised(exc)
+    requires:
+        Exception.is_input_error(exc) = true
+    ensures:
+        ProcessExit.code = 1
+        Stderr.content_contains("error:")
+}
+
+-- FR-005 + FR-011: system-error exit code
+rule HandleSystemError {
+    when: ExceptionRaised(exc)
+    requires:
+        Exception.is_construction_error(exc) = true
+    ensures:
+        ProcessExit.code = 2
+        Stderr.content_contains("error:")
+}
+
+-- FR-013a: --debug flag preserves Python traceback
+rule SurfaceTracebackWhenDebug {
+    when: ExceptionRaised(exc)
+    requires:
+        Cli.debug_flag_set = true
+    ensures:
+        Stderr.content_contains_python_traceback(exc)
+}
+
+-- FR-007 + FR-008: list-layouts
+rule ListLayouts {
+    when: ListLayoutsRun()
+    ensures:
+        Stdout.lists_all_canonical_layouts = true
+        ProcessExit.code = 0
+}
+
+-- FR-009: info
+rule Info {
+    when: InfoRun()
+    ensures:
+        Stdout.content_contains("freecad-storebro version")
+        Stdout.content_contains("Python version")
+        Stdout.content_contains("Platform")
+        Stdout.content_contains("FreeCAD detected")
+        Stdout.content_contains("FreeCAD supported range")
+        ProcessExit.code = 0
+}
+
+-- ===== Global invariants =====
+
+-- FR-014: CLI is the dependency-arrow apex
+invariant CliIsApexImport {
+    Module.imports("storebro.cli", "storebro.hull") = true
+    and Module.imports("storebro.cli", "storebro.deck") = true
+    and Module.imports("storebro.cli", "storebro.interior") = true
+    and Module.imports("storebro.cli", "storebro.export") = true
+}
+
+-- FR-013: non-interactive
+invariant NoUserPrompts {
+    not Module.uses("storebro.cli", "input")
+    and not Module.uses("storebro.cli", "getpass.getpass")
+}
+
+-- FR-012: no terminal-only output by default
+invariant NoColorCodesInDefaultOutput {
+    not Stdout.contains_ansi_escape()
+}
+
+-- FR-015: single public function `main(argv) -> int`
+invariant SinglePublicFunction {
+    Module.public_functions("storebro.cli") = {"main"}
+}
+
+-- SC-005: byte determinism delegates to spec 002
+-- (single-variable formulation: every artifact equals the canonical SHA-256
+-- for its args; two artifacts with same args therefore equal each other)
+invariant BuildReproducibilityDelegatedToExport {
+    for a in BuildArtifact:
+        a.sha256 = BuildArtifact.canonical_sha256_for_args(a.args)
+}
+
+-- SC-006: --help on every subcommand
+invariant HelpAvailableOnEverySubcommand {
+    Cli.help_works_for_build = true
+    and Cli.help_works_for_list_layouts = true
+    and Cli.help_works_for_info = true
+}
+
+-- ===== Open questions and deferred items =====
+
+deferred Cli.multi_format
+-- FR-016: `--format all` and comma-separated formats deferred to v1.1+.
+
+deferred Cli.config_file
+-- ~/.config/storebro.toml and STOREBRO_* env vars (other than STOREBRO_DEBUG)
+-- deferred to v1.1+.
+
+deferred Cli.hull_overrides
+-- --loa, --beam etc. for overriding default hull dimensions deferred to v1.1+.
+-- v1.0 ships canonical RC34 1972 defaults only via the CLI.
+
+deferred Cli.deck_overrides
+-- Same as above for deck dimensions.
+
+deferred Cli.custom_layout_dir
+-- --custom-layout-dir for list-layouts to discover user-supplied YAMLs is v1.1+.
+
+deferred Cli.json_output
+-- --json flag for machine-parseable output is v1.1+. v1.0 is plain text.
+
+deferred Cli.gui_launch
+-- A --gui flag launching FreeCAD GUI on the built file is v1.1+ if demand emerges.
+
+deferred Cli.full_assembly_in_non_fcstd_export
+-- v1.0 STEP / BREP / STL exports include the hull body only; deck + interior
+-- are dropped from those formats because spec 002's writers take a single Body.
+-- Full-assembly export (compound or fused solid) is deferred to v1.1+. fcstd
+-- already exports the full document and is unaffected.

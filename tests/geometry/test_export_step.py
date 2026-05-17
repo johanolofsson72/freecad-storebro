@@ -16,9 +16,7 @@ import pytest
 
 from storebro import HullParameters, build_hull, export_step
 
-HASH_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "expected_hashes.toml"
-)
+HASH_FIXTURE = Path(__file__).parent / "fixtures" / "expected_hashes.toml"
 
 
 def _short_hash(text: str) -> str:
@@ -96,6 +94,4 @@ def test_export_step_matches_baseline(tmp_path: Path) -> None:
     hull = build_hull()
     out = tmp_path / "regression.step"
     art = export_step(hull.body, out)
-    assert art.sha256 == expected, (
-        f"STEP SHA-256 drift — got {art.sha256}, expected {expected}"
-    )
+    assert art.sha256 == expected, f"STEP SHA-256 drift — got {art.sha256}, expected {expected}"

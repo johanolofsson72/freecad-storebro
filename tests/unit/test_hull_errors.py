@@ -106,9 +106,7 @@ class TestHullConstructionError:
     def test_construction_failure_attributes(self) -> None:
         params = HullParameters()
         underlying = RuntimeError("loft self-intersected")
-        err = HullConstructionError(
-            "FreeCAD failed", parameters=params, underlying=underlying
-        )
+        err = HullConstructionError("FreeCAD failed", parameters=params, underlying=underlying)
         assert err.parameters is params
         assert err.underlying is underlying
         assert err.detected_version is None

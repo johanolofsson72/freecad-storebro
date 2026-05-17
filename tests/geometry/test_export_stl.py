@@ -38,6 +38,4 @@ def test_export_stl_determinism(tmp_path: Path) -> None:
     hull = build_hull()
     a = export_stl(hull.body, tmp_path / "a.stl")
     b = export_stl(hull.body, tmp_path / "b.stl")
-    assert a.sha256 == b.sha256, (
-        f"STL byte determinism violated — {a.sha256} vs {b.sha256}"
-    )
+    assert a.sha256 == b.sha256, f"STL byte determinism violated — {a.sha256} vs {b.sha256}"

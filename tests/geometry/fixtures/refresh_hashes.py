@@ -66,31 +66,28 @@ def main() -> None:
         # STEP
         step_path = tmp_dir / "default.step"
         export_step(body, step_path)
-        print(f'[step__{fc_key}__{source_key}__{_kwargs_key({})}]')
+        print(f"[step__{fc_key}__{source_key}__{_kwargs_key({})}]")
         print(f'sha256 = "{_sha256_of(step_path)}"')
         print()
 
         # STL
         stl_path = tmp_dir / "default.stl"
         export_stl(body, stl_path)
-        print(
-            f'[stl__{fc_key}__{source_key}__'
-            f'{_kwargs_key({"tessellation_tolerance": 0.001})}]'
-        )
+        print(f"[stl__{fc_key}__{source_key}__{_kwargs_key({'tessellation_tolerance': 0.001})}]")
         print(f'sha256 = "{_sha256_of(stl_path)}"')
         print()
 
         # BREP
         brep_path = tmp_dir / "default.brep"
         export_brep(body, brep_path)
-        print(f'[brep__{fc_key}__{source_key}__{_kwargs_key({})}]')
+        print(f"[brep__{fc_key}__{source_key}__{_kwargs_key({})}]")
         print(f'sha256 = "{_sha256_of(brep_path)}"')
         print()
 
         # FCStd
         fcstd_path = tmp_dir / "default.FCStd"
         export_fcstd(document, fcstd_path)
-        print(f'[fcstd__{fc_key}__{source_key}__{_kwargs_key({})}]')
+        print(f"[fcstd__{fc_key}__{source_key}__{_kwargs_key({})}]")
         print(f'sha256 = "{_sha256_of(fcstd_path)}"')
         print()
 

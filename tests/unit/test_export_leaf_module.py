@@ -14,9 +14,7 @@ from pathlib import Path
 
 FORBIDDEN_PUBLIC_SIBLINGS = ["hull", "deck", "interior", "cli"]
 
-EXPORT_SOURCE = (
-    Path(__file__).parent.parent.parent / "src" / "storebro" / "export.py"
-)
+EXPORT_SOURCE = Path(__file__).parent.parent.parent / "src" / "storebro" / "export.py"
 
 
 def test_export_source_has_no_public_sibling_imports() -> None:
@@ -35,6 +33,5 @@ def test_export_source_has_no_public_sibling_imports() -> None:
                 for sibling in FORBIDDEN_PUBLIC_SIBLINGS:
                     forbidden = f"storebro.{sibling}"
                     assert not alias.name.startswith(forbidden), (
-                        f"FR-013 violation: export.py:{node.lineno} imports "
-                        f"{alias.name!r}"
+                        f"FR-013 violation: export.py:{node.lineno} imports {alias.name!r}"
                     )

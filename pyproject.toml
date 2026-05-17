@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freecad-storebro"
-version = "0.1.0"
+version = "1.0.0"
 description = "Parametric 3D model of a vintage Storebro motor yacht inside FreeCAD"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["freecad", "parametric", "cad", "yacht", "storebro", "b-rep"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -34,6 +34,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
 ]
+
+[project.scripts]
+storebro = "storebro.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/johanolofsson72/freecad-storebro"

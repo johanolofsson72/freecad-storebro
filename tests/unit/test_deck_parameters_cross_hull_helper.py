@@ -14,9 +14,7 @@ from storebro.deck import _validate_cross_hull_constraints
 
 
 def _stub_hull(loa: float, beam_max: float) -> SimpleNamespace:
-    return SimpleNamespace(
-        parameters=SimpleNamespace(loa=loa, beam_max=beam_max)
-    )
+    return SimpleNamespace(parameters=SimpleNamespace(loa=loa, beam_max=beam_max))
 
 
 def test_cabin_longer_than_loa_rejected() -> None:

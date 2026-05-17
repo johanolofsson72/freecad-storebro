@@ -10,9 +10,7 @@ class TestInteriorParameterError:
         assert issubclass(InteriorParameterError, ValueError)
 
     def test_message_with_all_fields(self) -> None:
-        err = InteriorParameterError(
-            "Alternativ3", "Salon", "dimensions.length", "must be > 0"
-        )
+        err = InteriorParameterError("Alternativ3", "Salon", "dimensions.length", "must be > 0")
         msg = str(err)
         assert "Alternativ3" in msg
         assert "Salon" in msg

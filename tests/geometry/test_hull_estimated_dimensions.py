@@ -29,6 +29,5 @@ def test_default_height_envelope_consistent(freecad_doc: object) -> None:
     # Z-max should be near sheer_height_fwd (the tallest sheer point).
     expected_top_m = p.sheer_height_fwd
     assert abs(measured_z_max_m - expected_top_m) <= expected_top_m * 0.5, (
-        f"Z-max {measured_z_max_m:.3f} m too far from sheer_height_fwd "
-        f"{expected_top_m} m"
+        f"Z-max {measured_z_max_m:.3f} m too far from sheer_height_fwd {expected_top_m} m"
     )

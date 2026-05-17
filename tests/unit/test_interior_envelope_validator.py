@@ -50,31 +50,23 @@ def test_negative_x_rejected() -> None:
 
 def test_extends_past_stem_rejected() -> None:
     with pytest.raises(InteriorParameterError) as exc:
-        _validate_compartment_in_envelope(
-            _spec(x=9.0, length=2.0), _stub_hull(), "test"
-        )
+        _validate_compartment_in_envelope(_spec(x=9.0, length=2.0), _stub_hull(), "test")
     assert exc.value.field == "dimensions.length"
 
 
 def test_too_wide_rejected() -> None:
     with pytest.raises(InteriorParameterError) as exc:
-        _validate_compartment_in_envelope(
-            _spec(width=4.0), _stub_hull(), "test"
-        )
+        _validate_compartment_in_envelope(_spec(width=4.0), _stub_hull(), "test")
     assert exc.value.field == "dimensions.width"
 
 
 def test_below_keel_rejected() -> None:
     with pytest.raises(InteriorParameterError) as exc:
-        _validate_compartment_in_envelope(
-            _spec(z=-2.0), _stub_hull(), "test"
-        )
+        _validate_compartment_in_envelope(_spec(z=-2.0), _stub_hull(), "test")
     assert exc.value.field == "position.z"
 
 
 def test_above_cabin_top_rejected() -> None:
     with pytest.raises(InteriorParameterError) as exc:
-        _validate_compartment_in_envelope(
-            _spec(z=1.0, height=5.0), _stub_hull(), "test"
-        )
+        _validate_compartment_in_envelope(_spec(z=1.0, height=5.0), _stub_hull(), "test")
     assert exc.value.field == "dimensions.height"

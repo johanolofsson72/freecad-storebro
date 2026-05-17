@@ -32,6 +32,5 @@ def test_hull_source_has_no_sibling_imports() -> None:
                 for sibling in FORBIDDEN_SIBLINGS:
                     forbidden = f"storebro.{sibling}"
                     assert not alias.name.startswith(forbidden), (
-                        f"FR-011 violation: hull.py:{node.lineno} imports "
-                        f"{alias.name!r}"
+                        f"FR-011 violation: hull.py:{node.lineno} imports {alias.name!r}"
                     )

@@ -79,13 +79,10 @@ class InteriorParameterError(ValueError):
         if compartment_name is None and field is None:
             message = f"InteriorParameterError: in {source} — {reason}"
         elif compartment_name is None:
-            message = (
-                f"InteriorParameterError: in {source} — field '{field}': {reason}"
-            )
+            message = f"InteriorParameterError: in {source} — field '{field}': {reason}"
         elif field is None:
             message = (
-                f"InteriorParameterError: in {source} — compartment "
-                f"'{compartment_name}': {reason}"
+                f"InteriorParameterError: in {source} — compartment '{compartment_name}': {reason}"
             )
         else:
             message = (
@@ -141,9 +138,7 @@ class InteriorConstructionError(RuntimeError):
 # Constants
 # ---------------------------------------------------------------------------
 
-_COMPARTMENT_TYPES: frozenset[str] = frozenset(
-    {"forward_cabin", "galley", "head", "salon"}
-)
+_COMPARTMENT_TYPES: frozenset[str] = frozenset({"forward_cabin", "galley", "head", "salon"})
 _CANONICAL_LAYOUT_NAMES: frozenset[str] = frozenset(
     {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}
 )
@@ -271,9 +266,7 @@ def _load_layout(source: str) -> tuple[str, dict[str, Any]]:
     """
     if source in _CANONICAL_LAYOUT_NAMES:
         try:
-            fixture_path = (
-                importlib.resources.files("storebro.fixtures") / f"{source}.yaml"
-            )
+            fixture_path = importlib.resources.files("storebro.fixtures") / f"{source}.yaml"
             text = fixture_path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError) as exc:
             raise InteriorParameterError(
@@ -282,9 +275,7 @@ def _load_layout(source: str) -> tuple[str, dict[str, Any]]:
         try:
             return source, yaml.safe_load(text) or {}
         except yaml.YAMLError as exc:
-            raise InteriorParameterError(
-                source, None, None, f"YAML parse error: {exc}"
-            ) from exc
+            raise InteriorParameterError(source, None, None, f"YAML parse error: {exc}") from exc
 
     path = Path(source).expanduser()
     if not path.is_file():
@@ -298,27 +289,24 @@ def _load_layout(source: str) -> tuple[str, dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise InteriorParameterError(
-            source, None, None, f"unable to read file: {exc}"
-        ) from exc
+        raise InteriorParameterError(source, None, None, f"unable to read file: {exc}") from exc
     try:
         return str(path.resolve()), yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise InteriorParameterError(
-            source, None, None, f"YAML parse error: {exc}"
-        ) from exc
+        raise InteriorParameterError(source, None, None, f"YAML parse error: {exc}") from exc
 
 
 def _validate_layout_schema(raw: dict[str, Any], source: str) -> LayoutSpec:
     """Validate raw YAML dict against the v1 schema and build a LayoutSpec."""
     if not isinstance(raw, dict):
-        raise InteriorParameterError(
-            source, None, None, "top-level YAML must be a mapping"
-        )
+        raise InteriorParameterError(source, None, None, "top-level YAML must be a mapping")
 
     if "schema_version" not in raw:
         raise InteriorParameterError(
-            source, None, "schema_version", "field is required (v1.0 fixtures use schema_version: 1)"
+            source,
+            None,
+            "schema_version",
+            "field is required (v1.0 fixtures use schema_version: 1)",
         )
     if raw["schema_version"] != 1:
         raise InteriorParameterError(
@@ -330,21 +318,15 @@ def _validate_layout_schema(raw: dict[str, Any], source: str) -> LayoutSpec:
 
     layout_name = raw.get("layout_name")
     if not isinstance(layout_name, str) or not layout_name:
-        raise InteriorParameterError(
-            source, None, "layout_name", "must be a non-empty string"
-        )
+        raise InteriorParameterError(source, None, "layout_name", "must be a non-empty string")
 
     src_field = raw.get("source")
     if not isinstance(src_field, str) or not src_field:
-        raise InteriorParameterError(
-            source, None, "source", "must be a non-empty string"
-        )
+        raise InteriorParameterError(source, None, "source", "must be a non-empty string")
 
     compartments_raw = raw.get("compartments")
     if not isinstance(compartments_raw, list) or not compartments_raw:
-        raise InteriorParameterError(
-            source, None, "compartments", "must be a non-empty list"
-        )
+        raise InteriorParameterError(source, None, "compartments", "must be a non-empty list")
 
     seen_names: set[str] = set()
     compartments: list[CompartmentSpec] = []
@@ -361,9 +343,7 @@ def _validate_layout_schema(raw: dict[str, Any], source: str) -> LayoutSpec:
     )
 
 
-def _parse_compartment_entry(
-    entry: Any, source: str, seen_names: set[str]
-) -> CompartmentSpec:
+def _parse_compartment_entry(entry: Any, source: str, seen_names: set[str]) -> CompartmentSpec:
     if not isinstance(entry, dict):
         raise InteriorParameterError(
             source, None, "compartments[i]", "each compartment must be a mapping"
@@ -375,9 +355,7 @@ def _parse_compartment_entry(
             source, None, "name", "each compartment must have a non-empty `name`"
         )
     if name in seen_names:
-        raise InteriorParameterError(
-            source, name, "name", "duplicate compartment name"
-        )
+        raise InteriorParameterError(source, name, "name", "duplicate compartment name")
 
     ctype = entry.get("type")
     if ctype not in _COMPARTMENT_TYPES:
@@ -401,9 +379,7 @@ def _parse_compartment_entry(
 
     description = entry.get("description")
     if description is not None and not isinstance(description, str):
-        raise InteriorParameterError(
-            source, name, "description", "must be a string if provided"
-        )
+        raise InteriorParameterError(source, name, "description", "must be a string if provided")
 
     return CompartmentSpec(
         name=name,
@@ -440,9 +416,7 @@ def _parse_position(raw: Any, source: str, compartment_name: str) -> Position3D:
     return Position3D(x=float(raw["x"]), y=float(raw["y"]), z=float(raw["z"]))
 
 
-def _parse_dimensions(
-    raw: Any, source: str, compartment_name: str
-) -> Dimensions3D:
+def _parse_dimensions(raw: Any, source: str, compartment_name: str) -> Dimensions3D:
     if not isinstance(raw, dict):
         raise InteriorParameterError(
             source,
@@ -537,9 +511,7 @@ def _resolve_document(hull: Hull, document: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _validate_compartment_in_envelope(
-    spec: CompartmentSpec, hull: Hull, source: str
-) -> None:
+def _validate_compartment_in_envelope(spec: CompartmentSpec, hull: Hull, source: str) -> None:
     """Reject compartments that exceed the hull envelope (FR-010)."""
     hp = hull.parameters
     if spec.position.x < 0:
@@ -576,14 +548,11 @@ def _validate_compartment_in_envelope(
             source,
             spec.name,
             "dimensions.height",
-            f"ceiling exceeds cabin trunk top "
-            f"({hp.sheer_height_fwd} + 1.5 m headroom)",
+            f"ceiling exceeds cabin trunk top ({hp.sheer_height_fwd} + 1.5 m headroom)",
         )
 
 
-def _aabb_intersection_volume(
-    c1: CompartmentSpec, c2: CompartmentSpec
-) -> float:
+def _aabb_intersection_volume(c1: CompartmentSpec, c2: CompartmentSpec) -> float:
     """AABB intersection volume for two compartments centered on Y=0."""
     # X overlap
     a_min = c1.position.x
@@ -607,9 +576,7 @@ def _aabb_intersection_volume(
     return x_overlap * y_overlap * z_overlap
 
 
-def _validate_no_overlaps(
-    compartments: tuple[CompartmentSpec, ...], source: str
-) -> None:
+def _validate_no_overlaps(compartments: tuple[CompartmentSpec, ...], source: str) -> None:
     """Pairwise compartment-overlap check (FR-012)."""
     for i, c1 in enumerate(compartments):
         for c2 in compartments[i + 1 :]:
@@ -682,9 +649,7 @@ def _build_compartment(
         spec.dimensions.width,
         spec.dimensions.height,
     )
-    box.translate(
-        FreeCAD.Vector(spec.position.x, -half_w, spec.position.z)
-    )
+    box.translate(FreeCAD.Vector(spec.position.x, -half_w, spec.position.z))
 
     label = _compartment_label(spec, layout_name)
     obj = target_doc.addObject("Part::Feature", label)
@@ -761,18 +726,14 @@ def build_interior(
     _validate_no_overlaps(layout_spec.compartments, resolved_source)
 
     target_doc = _resolve_document(hull, document)
-    resolved_label = (
-        name if name is not None else f"Interior_{layout_spec.layout_name}"
-    )
+    resolved_label = name if name is not None else f"Interior_{layout_spec.layout_name}"
 
     started = time.perf_counter()
     added: list[Any] = []
     try:
         compartments: list[Compartment] = []
         for spec in layout_spec.compartments:
-            compartment = _build_compartment(
-                spec, layout_spec.layout_name, target_doc, added
-            )
+            compartment = _build_compartment(spec, layout_spec.layout_name, target_doc, added)
             compartments.append(compartment)
         target_doc.recompute()
     except InteriorParameterError:
@@ -784,8 +745,7 @@ def build_interior(
     except BaseException as exc:
         _rollback(target_doc, added)
         raise InteriorConstructionError(
-            f"build_interior failed during compartment construction — "
-            f"{type(exc).__name__}: {exc}",
+            f"build_interior failed during compartment construction — {type(exc).__name__}: {exc}",
             layout_name=layout_spec.layout_name,
             hull=hull,
             deck=deck,

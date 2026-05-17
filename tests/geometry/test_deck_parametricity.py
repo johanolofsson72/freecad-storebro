@@ -22,9 +22,7 @@ from storebro import DeckParameters, build_deck, build_hull
         ("railing_height", 1.10),
     ],
 )
-def test_perturbation_increases_corresponding_dimension(
-    field: str, bbox_ratio: float
-) -> None:
+def test_perturbation_increases_corresponding_dimension(field: str, bbox_ratio: float) -> None:
     doc_default = FreeCAD.newDocument("ParametricityDefault3")
     doc_perturbed = FreeCAD.newDocument("ParametricityPerturbed3")
     try:

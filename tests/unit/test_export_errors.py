@@ -15,9 +15,7 @@ class TestExportInputError:
         assert issubclass(ExportInputError, ValueError)
 
     def test_attributes_set_by_init(self) -> None:
-        err = ExportInputError(
-            "target_path", "parent directory does not exist", "/no/such/dir"
-        )
+        err = ExportInputError("target_path", "parent directory does not exist", "/no/such/dir")
         assert err.field == "target_path"
         assert err.reason == "parent directory does not exist"
         assert err.offending_value == "/no/such/dir"

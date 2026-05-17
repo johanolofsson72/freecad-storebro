@@ -54,9 +54,7 @@ def test_two_writes_produce_identical_sha256(
 ) -> None:
     hull = build_hull()
     a, b = fn(hull.body, hull.document, tmp_path / f"a{ext}", tmp_path / f"b{ext}")
-    assert a.sha256 == b.sha256, (
-        f"{fmt}: byte determinism violated — {a.sha256} vs {b.sha256}"
-    )
+    assert a.sha256 == b.sha256, f"{fmt}: byte determinism violated — {a.sha256} vs {b.sha256}"
     assert a.byte_count == b.byte_count
 
 

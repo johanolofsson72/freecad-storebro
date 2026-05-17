@@ -44,9 +44,7 @@ def test_export_fcstd_round_trip(tmp_path: Path) -> None:
         )
         hull_body = next(o for o in reopened.Objects if o.Label.startswith("Hull"))
         for prop in REQUIRED_BODY_PROPERTIES:
-            assert hasattr(hull_body, prop), (
-                f"reopened Hull missing property {prop!r}"
-            )
+            assert hasattr(hull_body, prop), f"reopened Hull missing property {prop!r}"
     finally:
         FreeCAD.closeDocument(reopened.Name)
 
@@ -69,8 +67,7 @@ def test_export_fcstd_entries_have_fixed_epoch(tmp_path: Path) -> None:
     with zipfile.ZipFile(out, "r") as zf:
         for info in zf.infolist():
             assert info.date_time == (1980, 1, 1, 0, 0, 0), (
-                f"FR-020: entry {info.filename} has non-epoch timestamp "
-                f"{info.date_time}"
+                f"FR-020: entry {info.filename} has non-epoch timestamp {info.date_time}"
             )
 
 
@@ -80,8 +77,8 @@ def test_export_fcstd_entries_alphabetically_ordered(tmp_path: Path) -> None:
     export_fcstd(hull.document, out)
     with zipfile.ZipFile(out, "r") as zf:
         names = zf.namelist()
-    assert names == sorted(names), (
-        "FR-020: zip entries are not alphabetically ordered: " + repr(names)
+    assert names == sorted(names), "FR-020: zip entries are not alphabetically ordered: " + repr(
+        names
     )
 
 
@@ -89,6 +86,4 @@ def test_export_fcstd_determinism(tmp_path: Path) -> None:
     hull = build_hull()
     a = export_fcstd(hull.document, tmp_path / "a.FCStd")
     b = export_fcstd(hull.document, tmp_path / "b.FCStd")
-    assert a.sha256 == b.sha256, (
-        f"FCStd byte determinism violated — {a.sha256} vs {b.sha256}"
-    )
+    assert a.sha256 == b.sha256, f"FCStd byte determinism violated — {a.sha256} vs {b.sha256}"

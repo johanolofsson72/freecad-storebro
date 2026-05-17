@@ -11,8 +11,7 @@ import inspect
 import storebro.hull as hull_mod
 
 NAMES_REQUIRING_DOCSTRINGS = [
-    name for name in hull_mod.__all__
-    if not name.startswith("_") and name in vars(hull_mod)
+    name for name in hull_mod.__all__ if not name.startswith("_") and name in vars(hull_mod)
 ]
 
 
@@ -36,6 +35,4 @@ def test_every_public_name_has_docstring_example() -> None:
         doc = inspect.getdoc(obj)
         if not _docstring_has_example(doc):
             missing_example.append(name)
-    assert not missing_example, (
-        f"FR-014 violation: missing >>> example block on {missing_example}"
-    )
+    assert not missing_example, f"FR-014 violation: missing >>> example block on {missing_example}"
