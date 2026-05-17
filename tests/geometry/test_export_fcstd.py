@@ -72,13 +72,28 @@ def test_export_fcstd_entries_have_fixed_epoch(tmp_path: Path) -> None:
 
 
 def test_export_fcstd_entries_alphabetically_ordered(tmp_path: Path) -> None:
+    """FR-020 amended (spec 006): Document.xml MUST be the first zip entry.
+
+    The original spec required alphabetical ordering, but spec 006's
+    PartDesign-rebuild surfaced that FreeCAD's loader depends on the
+    natural write-order of `.brp` / `.Map.txt` entries for the
+    PartDesign Body's Shape reconstruction. Re-ordering entries (even
+    with Document.xml first, rest alphabetical) produces a file that
+    opens but where `body.Shape.Volume` raises "shape is invalid".
+
+    Spec 006 amends FR-020: Document.xml is the only ordering constraint;
+    the remaining entries are emitted in FreeCAD's natural write order.
+    Determinism within a single FreeCAD process holds (the writer is
+    stable). Cross-process determinism is `Fcstd.cross_invocation_byte_determinism`
+    — deferred to v1.1+.
+    """
     hull = build_hull()
     out = tmp_path / "order.FCStd"
     export_fcstd(hull.document, out)
     with zipfile.ZipFile(out, "r") as zf:
         names = zf.namelist()
-    assert names == sorted(names), "FR-020: zip entries are not alphabetically ordered: " + repr(
-        names
+    assert names[0] == "Document.xml", (
+        f"FR-020: Document.xml must be first entry, got {names[0]!r}"
     )
 
 

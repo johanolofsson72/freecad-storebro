@@ -448,9 +448,20 @@ def _canonical_xml_serialize(root: ET.Element) -> bytes:
 
 
 def _scrub_document_xml(xml_bytes: bytes) -> bytes:
-    """Scrub timestamps, user metadata, UUIDs, transient paths, and Object
-    IDs from an FCStd Document.xml entry so byte-determinism holds across
-    consecutive exports."""
+    """Scrub timestamps + user metadata from an FCStd Document.xml entry.
+
+    Spec 006 attempted to also scrub UUIDs, transient FCStd save paths,
+    Object IDs, ISO 8601 timestamps, and Topological-Naming hex tags
+    inside Map.txt / StringHasher entries. Every one of those broke
+    FreeCAD's cross-references: the file became technically still a zip
+    but the PartDesign Body's Shape recompute produced "shape is invalid"
+    or the GUI loader crashed with "Error reading compression file" /
+    SIGABRT. Cross-session byte determinism for the full hull+deck+interior
+    FCStd is therefore deferred to a future spec (see
+    deferred Fcstd.cross_session_byte_determinism in spec.allium). Within
+    a single FreeCAD process, the existing well-known metadata scrub
+    already produces byte-identical output for two consecutive exports.
+    """
     text = xml_bytes.decode("utf-8")
     root = ET.fromstring(text)
 
@@ -466,38 +477,30 @@ def _scrub_document_xml(xml_bytes: bytes) -> bytes:
                     elem.set(attr_name, _FCSTD_FIXED_DATE)
                 else:
                     elem.set(attr_name, _FCSTD_FIXED_USER)
-        # Scrub <Uuid value="..."> elements to a fixed nil UUID.
-        if elem.tag == "Uuid" and "value" in elem.attrib:
-            elem.set("value", _FCSTD_FIXED_UUID)
 
     serialized = _canonical_xml_serialize(root)
     text = serialized.decode("utf-8")
-    # Scrub transient FCStd save paths recorded as String values.
-    # Use \g<N> unambiguous backref form (plain \1 collides with following
-    # digits, e.g. \1 + "1980..." would parse as group 11).
-    text = _FCSTD_TRANSIENT_PATH_RE.sub(rf"\g<1>{_FCSTD_FIXED_TRANSIENT_PATH}\g<2>", text)
-    # Scrub ISO 8601 timestamp String values leaked into the doc.
-    text = _FCSTD_ISO_TIMESTAMP_RE.sub(rf"\g<1>{_FCSTD_FIXED_DATE}\g<2>", text)
-    # Renumber every `id="N"` attribute sequentially in document order so
-    # cross-document FreeCAD ID counters don't break determinism. References
-    # in the XML are by object NAME, not numeric ID, so renumbering is safe.
-    id_counter = iter(range(10000))
-
-    def _renumber_id(match: re.Match[str]) -> str:
-        return f"{match.group(1)}{next(id_counter)}{match.group(3)}"
-
-    text = _FCSTD_OBJECT_ID_RE.sub(_renumber_id, text)
+    # Scrub the transient FCStd save-path String value (mkstemp's random
+    # middle name leaks into a property). This is a property VALUE, not a
+    # cross-reference; rewriting it is safe and is the only diff between
+    # two consecutive exports of the same document in a single process.
+    text = _FCSTD_TRANSIENT_PATH_RE.sub(
+        rf"\g<1>{_FCSTD_FIXED_TRANSIENT_PATH}\g<2>", text
+    )
     return text.encode("utf-8")
 
 
 def _scrub_hex_tags(content: bytes) -> bytes:
-    """Normalize per-session hex tag counters in Shape.Map.txt files.
+    """Normalize per-session hex tag counters in Shape.Map.txt / StringHasher
+    files. The Topological Naming hex tags (`:H<hex>:`, `:H<hex>,V`) derive
+    from a FreeCAD process-global counter; without normalization two
+    consecutive exports of the same hull produce different Map.txt bytes
+    even though the geometry is identical. Renumber each unique tag to a
+    stable sequential index in document order.
 
-    FreeCAD's Topological Naming system stamps each element with a hex tag
-    (`:H57c:`, `:H1310:`, etc.) that derives from a global per-process
-    counter. Two consecutive exports produce different tags even for
-    identical geometry. Remap each unique tag to a stable sequential index
-    in document order so byte-identical bytes hold across runs.
+    Note: this scrub does NOT touch Document.xml — only the auxiliary
+    .Map.txt / StringHasher.Table.txt entries that don't participate in
+    FreeCAD's cross-reference graph for shape reconstruction.
     """
     seen: dict[bytes, bytes] = {}
 
@@ -525,7 +528,13 @@ def _scrub_fcstd_zip(raw_zip_bytes: bytes) -> bytes:
                 data = _scrub_hex_tags(data)
             entries.append((name, data))
 
-    entries.sort(key=lambda e: e[0])
+    # PRESERVE the original FreeCAD-written entry order. Spec 002's FR-020
+    # originally required alphabetical sort for determinism, but the
+    # PartDesign Body's Shape rebuild depends on the load order of the
+    # .brp / .Map.txt entries — sorting breaks "shape is invalid" or
+    # "Error reading compression file" depending on where Document.xml
+    # ends up. FreeCAD's own writer produces a stable order within a
+    # process; the in-process byte-determinism guarantee carries through.
 
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as zout:
