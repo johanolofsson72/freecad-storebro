@@ -15,10 +15,16 @@ Example:
 
 from storebro.cli import main
 from storebro.deck import (
+    CabinTrunkParameters,
     Deck,
     DeckConstructionError,
     DeckParameterError,
     DeckParameters,
+    DeckSuperstructureParameters,
+    HardtopParameters,
+    PillarParameters,
+    RailingParameters,
+    WindshieldParameters,
     build_deck,
 )
 from storebro.export import (
@@ -44,16 +50,19 @@ from storebro.interior import (
     build_interior,
 )
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 __all__ = [
+    "CabinTrunkParameters",
     "Deck",
     "DeckConstructionError",
     "DeckParameterError",
     "DeckParameters",
+    "DeckSuperstructureParameters",
     "ExportArtifact",
     "ExportInputError",
     "ExportWriteError",
+    "HardtopParameters",
     "Hull",
     "HullConstructionError",
     "HullParameterError",
@@ -61,6 +70,9 @@ __all__ = [
     "Interior",
     "InteriorConstructionError",
     "InteriorParameterError",
+    "PillarParameters",
+    "RailingParameters",
+    "WindshieldParameters",
     "__version__",
     "build_deck",
     "build_hull",

@@ -1,0 +1,401 @@
+-- allium: 3
+--
+-- Spec 008 — deck-superstructure-refresh — DISTILLED from implementation
+--
+-- Extracted from src/storebro/deck.py after the spec 008 implementation
+-- landed. Compared against ./spec.allium (the pre-implementation spec)
+-- to surface behavioral drift. Differences are flagged in /tla's drift
+-- report.
+--
+-- Source files inspected:
+--   src/storebro/deck.py (1845 LOC, full rewrite of 5/6 builders)
+--   src/storebro/__init__.py (re-exports)
+--   tests/unit/test_deck_*.py (validation coverage)
+--   tests/geometry/test_deck_*.py (PartDesign + seating + silhouette)
+
+config {
+    pillar_seating_tolerance_mm: Decimal = 1.0
+    default_pillar_count_per_side: Integer = 2
+    default_pillar_diameter_mm: Decimal = 35.0
+    default_pillar_inboard_offset_mm: Decimal = 80.0
+    default_railing_post_count_per_side: Integer = 6
+    default_railing_height_mm: Decimal = 720.0
+    default_railing_post_diameter_mm: Decimal = 25.0
+    default_railing_top_rail_diameter_mm: Decimal = 30.0
+    default_windshield_min_curvature_radius_mm: Decimal = 200.0
+}
+
+external entity HullBody {
+    loa_mm: Decimal
+}
+
+external entity DeckPlate {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    top_z_amidships_mm: Decimal
+}
+
+external entity Alternativ {
+    number: Integer
+}
+
+value CabinTrunkParameters {
+    length: Decimal
+    forward_width: Decimal
+    aft_width: Decimal
+    height: Decimal
+    forward_rake_angle: Decimal
+    aft_rake_angle: Decimal
+    wall_inset: Decimal
+
+    invariant PositiveDimensions {
+        this.length > 0
+        this.forward_width > 0
+        this.aft_width > 0
+        this.height > 0
+        this.wall_inset >= 0
+    }
+    invariant TaperedSilhouette { this.forward_width <= this.aft_width }
+    invariant ForwardRakeRange { this.forward_rake_angle >= 0 }
+    invariant ForwardRakeRangeUpper { this.forward_rake_angle <= 45 }
+    invariant AftRakeRangeLower { this.aft_rake_angle >= -15 }
+    invariant AftRakeRangeUpper { this.aft_rake_angle <= 30 }
+}
+
+value WindshieldParameters {
+    base_z: Decimal
+    top_z: Decimal
+    rake_angle_base: Decimal
+    rake_angle_top: Decimal
+    base_width: Decimal
+    top_width: Decimal
+    thickness: Decimal
+
+    invariant PositiveDimensions {
+        this.base_width > 0
+        this.top_width > 0
+        this.thickness > 0
+    }
+    invariant TopAboveBase { this.top_z > this.base_z }
+    invariant TopNarrowing { this.top_width <= this.base_width }
+    invariant CurvatureRadiusBound {
+        -- Computed inline; only enforced when rake_top != rake_base. Formula:
+        -- radius = (top_z - base_z) / (2 * sin(|rake_delta| / 2)).
+        -- Must be >= 200 mm.
+        true
+    }
+}
+
+value HardtopParameters {
+    length: Decimal
+    forward_width: Decimal
+    aft_width: Decimal
+    thickness: Decimal
+    height_above_deck: Decimal
+    leading_edge_curl_depth: Decimal
+    leading_edge_curl_length: Decimal
+
+    invariant PositiveDimensions {
+        this.length > 0
+        this.forward_width > 0
+        this.aft_width > 0
+        this.thickness > 0
+        this.height_above_deck > 0
+        this.leading_edge_curl_depth >= 0
+        this.leading_edge_curl_length >= 0
+    }
+    invariant AftTaper { this.aft_width <= this.forward_width }
+    invariant CurlBoundedByLength { this.leading_edge_curl_length <= this.length }
+    invariant CurlBoundedByHeight { this.leading_edge_curl_depth <= this.height_above_deck }
+}
+
+value PillarParameters {
+    count_per_side: Integer
+    diameter: Decimal
+    forward_x: Decimal
+    aft_x: Decimal
+    inboard_offset_from_sheer: Decimal
+
+    invariant NonNegativeCount { this.count_per_side >= 0 }
+    invariant PositiveDiameter { this.diameter > 0 }
+    invariant LongitudinalOrdering { this.forward_x < this.aft_x }
+    invariant PositiveOffset { this.inboard_offset_from_sheer >= 0 }
+}
+
+value RailingParameters {
+    post_count_per_side: Integer
+    post_diameter: Decimal
+    top_rail_diameter: Decimal
+    height_above_deck: Decimal
+    forward_x: Decimal
+    aft_x: Decimal
+    inboard_offset_from_sheer: Decimal
+
+    invariant NonNegativeCount { this.post_count_per_side >= 0 }
+    invariant PositiveDiameters {
+        this.post_diameter > 0
+        this.top_rail_diameter > 0
+    }
+    invariant PositiveHeight { this.height_above_deck > 0 }
+    invariant LongitudinalOrdering { this.forward_x < this.aft_x }
+}
+
+value DeckSuperstructureParameters {
+    cabin_trunk: CabinTrunkParameters
+    windshield: WindshieldParameters
+    hardtop: HardtopParameters
+    pillars: PillarParameters
+    railings: RailingParameters
+
+    invariant RailingNotPenetratingHardtop {
+        this.railings.height_above_deck < this.hardtop.height_above_deck
+    }
+    invariant PillarsOutsideCabinFootprint {
+        this.pillars.forward_x >= this.cabin_trunk.length
+    }
+}
+
+-- Output entities — the actual implementation builds these via the
+-- legacy wrapper API (CabinTrunk, Windshield, Hardtop, HardtopPillars,
+-- Railings) preserved for back-compat. The underlying body is now
+-- PartDesign::Body instead of Part::Feature.
+
+entity CabinTrunkBody {
+    parameters: CabinTrunkParameters
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    is_partdesign_body: Boolean
+    has_two_section_loft: Boolean
+    -- Construction: AdditiveLoft (Ruled=True) between two trapezoidal
+    -- sketches on XY-parallel datums.
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.has_two_section_loft = true
+    }
+}
+
+entity WindshieldBody {
+    parameters: WindshieldParameters
+    is_partdesign_body: Boolean
+    is_lofted_between_three_sections: Boolean
+    -- DRIFT from spec.allium: spec.allium specified
+    -- "is_lofted_between_two_edges" (port-edge + starboard-edge B-splines)
+    -- but the implementation uses 3 cross-section sketches (base / mid /
+    -- top) on YZ-parallel datums, each being a rectangle of
+    -- (base_width|top_width) × thickness. This still produces a smooth
+    -- forward-curving windshield via Ruled=False B-spline loft, but the
+    -- loft topology differs from the spec.
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.is_lofted_between_three_sections = true
+    }
+}
+
+entity HardtopBody {
+    parameters: HardtopParameters
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    is_partdesign_body: Boolean
+    has_aft_taper: Boolean
+    has_leading_edge_curl: Boolean
+    loft_ruled_mode: Boolean
+    -- DRIFT from spec.allium: spec.allium implied smooth B-spline curl
+    -- (Ruled=False). The implementation uses Ruled=True because the
+    -- 3-section loft with the curl-induced Z gradient discontinuity
+    -- between forward (low) and mid (level) sections produced 565 mm of
+    -- spurious Z overshoot at the aft edge under Ruled=False. Tracked
+    -- as deferred Hardtop.smooth_curl_loft (a denser section set is the
+    -- proper fix).
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.has_aft_taper = true
+        this.loft_ruled_mode = true
+    }
+}
+
+entity PillarBody {
+    parameters: PillarParameters
+    bundle: SuperstructureBundle
+    longitudinal_x_mm: Decimal
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    deck_top_z_at_x_mm: Decimal
+    hardtop_underside_z_at_x_mm: Decimal
+    lower_endpoint_z_mm: Decimal
+    upper_endpoint_z_mm: Decimal
+    centerline_is_vertical: Boolean
+
+    invariant ValidBody { this.is_partdesign_body = true }
+    invariant VerticalCenterline { this.centerline_is_vertical = true }
+    invariant SeatedOnDeck {
+        this.lower_endpoint_z_mm >= this.deck_top_z_at_x_mm - 1.0
+        this.lower_endpoint_z_mm <= this.deck_top_z_at_x_mm + 1.0
+    }
+    invariant TopAtHardtopUnderside {
+        this.upper_endpoint_z_mm >= this.hardtop_underside_z_at_x_mm - 1.0
+        this.upper_endpoint_z_mm <= this.hardtop_underside_z_at_x_mm + 1.0
+    }
+}
+
+entity RailingBody {
+    parameters: RailingParameters
+    bundle: SuperstructureBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    has_swept_top_rail: Boolean
+    -- DRIFT from spec.allium: spec.allium described an AdditivePipe
+    -- (true sweep) along a perimeter wire. The implementation uses a
+    -- straight cylindrical bar (Pad of a circular sketch on a
+    -- YZ-parallel datum, extruded along global X) for the top rail.
+    -- This captures rail height + length but not the perimeter-following
+    -- shape. Tracked as deferred Railing.swept_top_rail_along_perimeter.
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.has_swept_top_rail = false
+    }
+}
+
+entity SuperstructureBundle {
+    layout: Alternativ
+    hull: HullBody
+    deck_plate: DeckPlate
+    parameters: DeckSuperstructureParameters
+    cabin_trunk: CabinTrunkBody
+    windshield: WindshieldBody
+    hardtop: HardtopBody
+
+    pillars: PillarBody with bundle = this
+    railings: RailingBody with bundle = this
+    port_pillars: pillars where is_port = true
+    starboard_pillars: pillars where is_port = false
+
+    invariant AllRequiredBodiesPresent {
+        this.cabin_trunk != null
+        this.windshield != null
+        this.hardtop != null
+    }
+    invariant PillarsSymmetric {
+        this.port_pillars.count = this.starboard_pillars.count
+    }
+    invariant RailingCount { this.railings.count = 2 }
+}
+
+-- Public API rules
+
+rule ValidateAndBuild {
+    when: BuildDeck(hull, parameters, parameters_superstructure)
+    requires: parameters = null or parameters_superstructure = null
+    -- Mutually exclusive — passing both raises DeckParameterError.
+    ensures:
+        SuperstructureBundle.created(
+            hull: hull,
+            parameters: parameters_superstructure or
+                parameters.to_superstructure_parameters()
+        )
+}
+
+rule LegacyShimDelegates {
+    -- DeckParameters.to_superstructure_parameters() — deterministic map
+    when: ToSuperstructureParameters(legacy)
+    ensures:
+        let sp = DeckSuperstructureParameters.created(
+            cabin_trunk: CabinTrunkParameters(
+                length: legacy.cabin_trunk_length * 1000,
+                forward_width: legacy.cabin_trunk_width * 1000,
+                aft_width: legacy.cabin_trunk_width * 1000,
+                height: legacy.cabin_trunk_height * 1000,
+                forward_rake_angle: default_cabin_trunk_forward_rake_angle,
+                aft_rake_angle: default_cabin_trunk_aft_rake_angle,
+                wall_inset: legacy.deck_side_walkway * 1000
+            )
+            -- Windshield, hardtop, pillars, railings similarly mapped.
+            -- See research.md §R4 for the full mapping.
+        )
+        sp.cabin_trunk.forward_width = sp.cabin_trunk.aft_width
+        -- Legacy rectangular cabin trunk → equal widths on shim output.
+}
+
+-- Global invariants — must hold across all SuperstructureBundle instances.
+
+invariant DeterministicShapeDigest {
+    -- Same inputs → identical shape; covered by test_deck_determinism +
+    -- test_export_fcstd_determinism.
+    for b1 in SuperstructureBundle:
+        for b2 in SuperstructureBundle:
+            b1.shape_digest = b2.shape_digest
+}
+
+invariant FreeCADIdiomaticBodies {
+    for b in SuperstructureBundle:
+        b.cabin_trunk.is_partdesign_body = true
+        b.windshield.is_partdesign_body = true
+        b.hardtop.is_partdesign_body = true
+}
+
+invariant NoPillarPiercesDeckPlate {
+    for p in PillarBody:
+        p.lower_endpoint_z_mm >= p.deck_top_z_at_x_mm - 1.0
+}
+
+invariant PillarsTopAtHardtopUnderside {
+    for p in PillarBody:
+        p.upper_endpoint_z_mm >= p.hardtop_underside_z_at_x_mm - 1.0
+        p.upper_endpoint_z_mm <= p.hardtop_underside_z_at_x_mm + 1.0
+}
+
+invariant SymmetricPillars {
+    for b in SuperstructureBundle:
+        b.port_pillars.count = b.starboard_pillars.count
+}
+
+invariant SymmetricRailings {
+    for b in SuperstructureBundle:
+        b.railings.count = 2
+}
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface DeckBuildAPI {
+    facing consumer: LibraryConsumer
+    context layout: Alternativ
+    context hull: HullBody
+    context params: DeckSuperstructureParameters
+    provides: BuildDeck(layout, hull, params)
+    exposes:
+        SuperstructureBundle
+        consumer.loa_mm
+}
+
+-- Deferred items — known scope boundaries + new gaps discovered during
+-- implementation.
+
+deferred SuperstructureBundle.rubrail
+deferred WindshieldBody.transparent_glass
+deferred SuperstructureBundle.colors
+deferred SuperstructureBundle.ds_variant
+deferred WindshieldBody.compound_3d_crown
+
+-- New deferred items surfaced during implementation:
+deferred Hardtop.smooth_curl_loft
+-- Hardtop loft uses Ruled=True (piecewise-linear) due to B-spline
+-- overshoot on the 3-section curl. A denser section set (≥5 sections
+-- across the curl) would allow Ruled=False without Z overshoot. Tracked
+-- as a future spec refinement.
+
+deferred Railing.swept_top_rail_along_perimeter
+-- Top rail is currently a straight cylinder along the boat centerline.
+-- The proper RC34 visual is a perimeter-following sweep (PartDesign
+-- AdditivePipe along the sheer wire). This was descoped to keep the
+-- v1.0.2 PR small; tracked as v1.2+ refinement.
+
+deferred Windshield.lofted_between_port_starboard_edges
+-- Spec specified two-edge B-spline loft (port + starboard B-splines).
+-- Impl uses 3-section slab loft (base/mid/top) on YZ-parallel datums,
+-- which produces equivalent silhouette + curvature but different loft
+-- topology. Equivalent geometry; topology difference noted for the
+-- record. Re-evaluate if spec 011 (transparent glass) needs the
+-- two-edge topology.

@@ -1,0 +1,539 @@
+-- allium: 3
+--
+-- Spec 008 — deck-superstructure-refresh
+--
+-- Parametric reshape of cabin trunk + windshield + hardtop + pillars +
+-- railings to match the Storebro RC34 1972 reference profile. Fixes the
+-- v1.0.1 regression where hardtop pillars extended below the deck plate
+-- into the hull.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+    pillar_seating_tolerance_mm: Decimal = 1.0
+    default_pillar_count_per_side: Integer = 2
+    default_pillar_diameter_mm: Decimal = 35.0
+    default_pillar_inboard_offset_mm: Decimal = 80.0
+    default_railing_post_count_per_side: Integer = 6
+    default_railing_height_mm: Decimal = 720.0
+    default_railing_post_diameter_mm: Decimal = 25.0
+    default_railing_top_rail_diameter_mm: Decimal = 30.0
+    default_hardtop_overhang_min_mm: Decimal = 50.0
+    default_windshield_min_curvature_radius_mm: Decimal = 200.0
+}
+
+-- External entities — from earlier specs, consumed here.
+
+external entity HullBody {
+    loa_mm: Decimal
+    sheer_z_aft_mm: Decimal
+    sheer_z_fwd_mm: Decimal
+}
+
+external entity DeckPlate {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    top_z_amidships_mm: Decimal
+    width_amidships_mm: Decimal
+}
+
+external entity Alternativ {
+    number: Integer
+}
+
+-- Value types — parametric inputs, no identity.
+
+value CabinTrunkParameters {
+    length_mm: Decimal
+    forward_width_mm: Decimal
+    aft_width_mm: Decimal
+    height_mm: Decimal
+    forward_rake_angle_deg: Decimal
+    aft_rake_angle_deg: Decimal
+    wall_inset_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.forward_width_mm > 0
+        this.aft_width_mm > 0
+        this.height_mm > 0
+        this.wall_inset_mm >= 0
+    }
+
+    invariant TaperedSilhouette {
+        this.forward_width_mm <= this.aft_width_mm
+    }
+
+    invariant RealisticRake {
+        this.forward_rake_angle_deg >= 0
+        this.forward_rake_angle_deg <= 45
+    }
+}
+
+value WindshieldParameters {
+    base_z_mm: Decimal
+    top_z_mm: Decimal
+    rake_angle_base_deg: Decimal
+    rake_angle_top_deg: Decimal
+    base_width_mm: Decimal
+    top_width_mm: Decimal
+    thickness_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.base_width_mm > 0
+        this.top_width_mm > 0
+        this.thickness_mm > 0
+    }
+
+    invariant TopAboveBase {
+        this.top_z_mm > this.base_z_mm
+    }
+
+    invariant TopNarrowingOrEqual {
+        this.top_width_mm <= this.base_width_mm
+    }
+}
+
+value HardtopParameters {
+    length_mm: Decimal
+    forward_width_mm: Decimal
+    aft_width_mm: Decimal
+    thickness_mm: Decimal
+    height_above_deck_mm: Decimal
+    leading_edge_curl_depth_mm: Decimal
+    leading_edge_curl_length_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.forward_width_mm > 0
+        this.aft_width_mm > 0
+        this.thickness_mm > 0
+        this.height_above_deck_mm > 0
+        this.leading_edge_curl_depth_mm >= 0
+        this.leading_edge_curl_length_mm >= 0
+    }
+
+    invariant AftTaper {
+        this.aft_width_mm <= this.forward_width_mm
+    }
+
+    invariant CurlBoundedByLength {
+        this.leading_edge_curl_length_mm <= this.length_mm
+    }
+
+    invariant CurlBoundedByHeight {
+        this.leading_edge_curl_depth_mm <= this.height_above_deck_mm
+    }
+}
+
+value PillarParameters {
+    count_per_side: Integer
+    diameter_mm: Decimal
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    inboard_offset_from_sheer_mm: Decimal
+
+    invariant NonNegativeCount {
+        this.count_per_side >= 0
+    }
+
+    invariant PositiveDiameter {
+        this.diameter_mm > 0
+    }
+
+    invariant LongitudinalOrdering {
+        this.forward_x_mm < this.aft_x_mm
+    }
+
+    invariant PositiveInboardOffset {
+        this.inboard_offset_from_sheer_mm >= 0
+    }
+}
+
+value RailingParameters {
+    post_count_per_side: Integer
+    post_diameter_mm: Decimal
+    top_rail_diameter_mm: Decimal
+    height_above_deck_mm: Decimal
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    inboard_offset_from_sheer_mm: Decimal
+
+    invariant NonNegativeCount {
+        this.post_count_per_side >= 0
+    }
+
+    invariant PositiveDiameters {
+        this.post_diameter_mm > 0
+        this.top_rail_diameter_mm > 0
+    }
+
+    invariant PositiveHeight {
+        this.height_above_deck_mm > 0
+    }
+
+    invariant LongitudinalOrdering {
+        this.forward_x_mm < this.aft_x_mm
+    }
+}
+
+value DeckSuperstructureParameters {
+    cabin_trunk: CabinTrunkParameters
+    windshield: WindshieldParameters
+    hardtop: HardtopParameters
+    pillars: PillarParameters
+    railings: RailingParameters
+}
+
+-- Output entities — produced by the build operation.
+
+entity CabinTrunkBody {
+    parameters: CabinTrunkParameters
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    is_partdesign_body: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity WindshieldBody {
+    parameters: WindshieldParameters
+    is_partdesign_body: Boolean
+    is_lofted_between_two_edges: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.is_lofted_between_two_edges = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity HardtopBody {
+    parameters: HardtopParameters
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    underside_z_forward_mm: Decimal
+    underside_z_aft_mm: Decimal
+    is_partdesign_body: Boolean
+    has_aft_taper: Boolean
+    has_leading_edge_curl: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+        this.has_aft_taper = true
+    }
+}
+
+entity PillarBody {
+    parameters: PillarParameters
+    bundle: SuperstructureBundle
+    longitudinal_x_mm: Decimal
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    deck_top_z_at_x_mm: Decimal
+    hardtop_underside_z_at_x_mm: Decimal
+    lower_endpoint_z_mm: Decimal
+    upper_endpoint_z_mm: Decimal
+    bounding_box_min_z_mm: Decimal
+    centerline_is_vertical: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant VerticalCenterline {
+        this.centerline_is_vertical = true
+    }
+
+    invariant SeatedOnDeck {
+        this.bounding_box_min_z_mm >= this.deck_top_z_at_x_mm - 1.0
+        this.lower_endpoint_z_mm >= this.deck_top_z_at_x_mm - 1.0
+        this.lower_endpoint_z_mm <= this.deck_top_z_at_x_mm + 1.0
+    }
+
+    invariant TopAtHardtopUnderside {
+        this.upper_endpoint_z_mm >= this.hardtop_underside_z_at_x_mm - 1.0
+        this.upper_endpoint_z_mm <= this.hardtop_underside_z_at_x_mm + 1.0
+    }
+
+    invariant UpperAboveLower {
+        this.upper_endpoint_z_mm > this.lower_endpoint_z_mm
+    }
+}
+
+entity RailingBody {
+    parameters: RailingParameters
+    bundle: SuperstructureBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity SuperstructureBundle {
+    layout: Alternativ
+    hull: HullBody
+    deck_plate: DeckPlate
+    parameters: DeckSuperstructureParameters
+    cabin_trunk: CabinTrunkBody
+    windshield: WindshieldBody
+    hardtop: HardtopBody
+    shape_digest: String
+
+    pillars: PillarBody with bundle = this
+    railings: RailingBody with bundle = this
+    port_pillars: pillars where is_port = true
+    starboard_pillars: pillars where is_port = false
+    expected_pillar_total: parameters.pillars.count_per_side * 2
+
+    invariant AllRequiredBodiesPresent {
+        this.cabin_trunk != null
+        this.windshield != null
+        this.hardtop != null
+    }
+
+    invariant PillarTotalMatchesParameters {
+        this.pillars.count = this.expected_pillar_total
+    }
+
+    invariant PillarsSymmetricPortStarboard {
+        this.port_pillars.count = this.starboard_pillars.count
+    }
+
+    invariant ExactlyTwoRailings {
+        this.railings.count = 2
+    }
+
+    invariant RailingNotPenetratingHardtop {
+        this.parameters.railings.height_above_deck_mm
+            < this.parameters.hardtop.height_above_deck_mm
+    }
+}
+
+-- Rules — parameter validation and the build operation.
+
+rule ValidateDeckSuperstructureParameters {
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    requires:
+        params.cabin_trunk.length_mm > 0
+        params.cabin_trunk.forward_width_mm > 0
+        params.cabin_trunk.aft_width_mm > 0
+        params.cabin_trunk.height_mm > 0
+        params.windshield.base_width_mm > 0
+        params.windshield.top_width_mm > 0
+        params.windshield.top_width_mm <= params.windshield.base_width_mm
+        params.windshield.top_z_mm > params.windshield.base_z_mm
+        params.hardtop.length_mm > 0
+        params.hardtop.aft_width_mm <= params.hardtop.forward_width_mm
+        params.hardtop.height_above_deck_mm > 0
+        params.hardtop.leading_edge_curl_length_mm <= params.hardtop.length_mm
+        params.hardtop.leading_edge_curl_depth_mm <= params.hardtop.height_above_deck_mm
+        params.pillars.count_per_side >= 0
+        params.pillars.diameter_mm > 0
+        params.pillars.forward_x_mm < params.pillars.aft_x_mm
+        params.pillars.inboard_offset_from_sheer_mm >= 0
+        params.railings.post_count_per_side >= 0
+        params.railings.height_above_deck_mm > 0
+        params.railings.height_above_deck_mm < params.hardtop.height_above_deck_mm
+}
+
+rule RejectPillarInsideCabinFootprint {
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    requires:
+        params.pillars.forward_x_mm >= params.cabin_trunk.length_mm
+}
+
+rule RejectOversizedHardtopOverhang {
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    requires:
+        params.hardtop.forward_width_mm <= deck_plate.width_amidships_mm
+        params.hardtop.aft_width_mm <= deck_plate.width_amidships_mm
+}
+
+rule RejectSubMinimumWindshieldCurvature {
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    requires:
+        params.windshield.top_z_mm - params.windshield.base_z_mm >= 200.0
+}
+
+rule BuildDeckSuperstructure {
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    ensures:
+        SuperstructureBundle.created(
+            layout: layout,
+            hull: hull,
+            deck_plate: deck_plate,
+            parameters: params
+        )
+}
+
+rule BuildCabinTrunk {
+    when: BuildCabinTrunk(params, hull, deck_plate)
+    ensures:
+        CabinTrunkBody.created(
+            parameters: params,
+            forward_x_mm: deck_plate.forward_x_mm + params.wall_inset_mm,
+            aft_x_mm: deck_plate.forward_x_mm + params.wall_inset_mm + params.length_mm,
+            is_partdesign_body: true
+        )
+}
+
+rule BuildWindshield {
+    when: BuildWindshield(params, cabin_trunk)
+    ensures:
+        WindshieldBody.created(
+            parameters: params,
+            is_partdesign_body: true,
+            is_lofted_between_two_edges: true
+        )
+}
+
+rule BuildHardtop {
+    when: BuildHardtop(params, cabin_trunk, windshield)
+    ensures:
+        HardtopBody.created(
+            parameters: params,
+            forward_x_mm: cabin_trunk.aft_x_mm,
+            aft_x_mm: cabin_trunk.aft_x_mm + params.length_mm,
+            is_partdesign_body: true,
+            has_aft_taper: true
+        )
+}
+
+rule BuildOnePillar {
+    -- Builds a single pillar at a given longitudinal station on a given side.
+    -- The build_deck driver iterates this rule count_per_side times on each
+    -- of {port, starboard}, with X computed from forward_x..aft_x.
+    when: BuildOnePillar(params, deck_plate, hardtop, x, side)
+    requires:
+        params.count_per_side > 0
+        x >= params.forward_x_mm
+        x <= params.aft_x_mm
+    ensures:
+        PillarBody.created(
+            parameters: params,
+            longitudinal_x_mm: x,
+            is_port: side,
+            is_partdesign_body: true,
+            centerline_is_vertical: true
+        )
+}
+
+rule BuildPillarsZeroCountFallback {
+    -- Zero-pillar fallback: hardtop seats directly on cabin trunk roof.
+    -- Cantilevered variant is explicitly out of scope (clarification 4).
+    when: BuildPillars(params, deck_plate, hardtop, cabin_trunk)
+    requires: params.count_per_side = 0
+    ensures:
+        HardtopAttachesToCabinTrunkRoof(hardtop, cabin_trunk)
+}
+
+rule BuildOneRailing {
+    when: BuildOneRailing(params, deck_plate, hull, side)
+    ensures:
+        RailingBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true
+        )
+}
+
+rule LayoutInvariantSuperstructureShape {
+    -- All five Alternativ layouts share the standard RC34 superstructure.
+    -- Asserted by comparing shape_digests across layouts.
+    when: BuildDeckSuperstructure(layout, hull, deck_plate, params)
+    ensures:
+        SuperstructureDigestsLayoutInvariant(hull, deck_plate, params)
+}
+
+-- Global invariants — must hold across ALL SuperstructureBundle instances.
+
+invariant ReferenceFidelityWithinOnePercent {
+    for b in SuperstructureBundle:
+        ReferenceDeviationPct(b) <= 1.0
+}
+
+invariant DeterministicShapeDigest {
+    -- Two builds with identical (layout, hull, deck_plate, parameters)
+    -- produce identical shape_digest values.
+    for b1 in SuperstructureBundle:
+        for b2 in SuperstructureBundle:
+            b1.shape_digest = b2.shape_digest
+}
+
+invariant FreeCADIdiomaticAllBodies {
+    for b in SuperstructureBundle:
+        b.cabin_trunk.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllPillars {
+    for p in PillarBody:
+        p.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllRailings {
+    for r in RailingBody:
+        r.is_partdesign_body = true
+}
+
+invariant NoPillarPiercesDeckPlate {
+    -- The headline correctness invariant of this spec.
+    for p in PillarBody:
+        p.bounding_box_min_z_mm >= p.deck_top_z_at_x_mm - 1.0
+}
+
+invariant PillarsAttachToHardtopUnderside {
+    for p in PillarBody:
+        p.upper_endpoint_z_mm >= p.hardtop_underside_z_at_x_mm - 1.0
+        p.upper_endpoint_z_mm <= p.hardtop_underside_z_at_x_mm + 1.0
+}
+
+invariant SymmetricPillarPortStarboard {
+    for b in SuperstructureBundle:
+        b.port_pillars.count = b.starboard_pillars.count
+}
+
+invariant SymmetricRailings {
+    for b in SuperstructureBundle:
+        b.railings.count = 2
+}
+
+-- Actors and surfaces — the library's public API.
+-- The library has no human-facing UI; the consumer is a CLI invocation
+-- or a Python API call, both authenticated only by passing in a HullBody.
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface DeckBuildAPI {
+    facing consumer: LibraryConsumer
+    context layout: Alternativ
+    context hull: HullBody
+    context params: DeckSuperstructureParameters
+    provides: BuildDeckSuperstructure(layout, hull, params)
+    exposes:
+        SuperstructureBundle
+        consumer.loa_mm
+}
+
+-- Deferred items — known limitations + future work.
+
+deferred SuperstructureBundle.rubrail
+deferred WindshieldBody.transparent_glass
+deferred SuperstructureBundle.colors
+deferred SuperstructureBundle.ds_variant
+deferred WindshieldBody.compound_3d_crown
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md → ## Clarifications → Session 2026-05-18).
