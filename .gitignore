@@ -2,15 +2,15 @@
 .DS_Store
 *.swp
 
-# Local LLM artifacts (per-developer, never committed)
-.claude/.local-llm-commit-draft.md
-.claude/.local-llm-pr-draft.md
-.claude/.local-llm-changelog-draft.md
-.claude/.local-llm-fire.log
-.claude/.local-llm-trace.log
+# Claude Code per-developer / per-session artifacts
+.claude/.local-llm-*
 .claude/local-llm-*.log
 .claude/local-llm-*.log.*
+.claude/local-llm-*.log.errors
 .claude/.local-llm-cache/
+.claude/validation/
+.claude/projects/
+.claude/settings.local.json
 
 # Playwright MCP session state (per-session, never committed)
 .playwright-mcp/

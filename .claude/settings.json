@@ -168,8 +168,8 @@
         "matcher": "Edit|Write",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "A file was just written/edited. Check: if the file path contains spec, tasks, plan, or feature AND is a .md file, determine if it involves INTERACTIVE UI \u2014 meaning forms, user input fields, buttons that mutate state, multi-step flows, authentication, file uploads, search/filter, or drag-and-drop. Static pages, landing pages, content display, styling/CSS, i18n/translations, layout changes, and read-only dashboards do NOT count as interactive UI. If the spec involves interactive UI, check TWO things: (1) Does it have a FUNCTIONAL COVERAGE section listing ALL implemented functions with one test per function? (2) Does it have DESTRUCTIVE test scenarios? If EITHER is missing, respond with a systemMessage. For missing functional coverage: remind that EVERY implemented function needs a test \u2014 listing 3 functions when 12 were built is not acceptable. For missing destructive tests: remind about the 8+ scenarios from 6 attack categories. Do NOT block \u2014 always approve and use systemMessage for the reminder.",
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/spec-md-coverage-reminder-hook.sh\"",
             "statusMessage": "Validating spec completeness..."
           }
         ]

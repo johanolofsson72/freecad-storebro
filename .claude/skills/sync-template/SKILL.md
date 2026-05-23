@@ -68,6 +68,7 @@ Read these files from the template repo (`/Users/jool/repos/Claude`):
 - `stress-testing.md`
 - `spec-testing-checklist.md`
 - `project-template.md`
+- `graphify.md`
 
 **Scripts:**
 - `scripts/tla-hook.sh`
@@ -81,6 +82,7 @@ Read these files from the template repo (`/Users/jool/repos/Claude`):
 - `scripts/feature-pipeline-detect.sh`
 - `scripts/spec-register-guard-hook.sh`
 - `scripts/spec-register-orientation-hook.sh`
+- `scripts/spec-md-coverage-reminder-hook.sh` (deterministic replacement for the legacy `type:"prompt"` spec-completeness hook; never blocks, suppresses reminder on carved-out test slices)
 - `scripts/local-llm-call.sh` (telemetry funnel + auto-detect)
 - `scripts/local-llm-detect.sh`
 - `scripts/local-llm-stats.sh` (per-hook ROI reporter)
@@ -131,8 +133,11 @@ The merge rule above defaults to preserving customizations, but the following in
 | `UserPromptSubmit` speckit pipeline mandate | `speckit[.:_-](specify\|plan\|tasks\|implement)` or `speckit[.:_-](specify\|clarify\|plan\|tasks\|implement)` | Pipeline phase list evolves; new steps (e.g. `/clarify` between specify and allium, `/speckit.analyze` between tasks and implement) get added over time. The template version mandates `/clarify` immediately after `/specify` on every track and `/allium:elicit` after `/clarify` on full/light tracks — if the project's hook is missing the clarify step, overwrite it. |
 | `UserPromptSubmit` speckit.analyze auto-apply | `speckit[.:_-](analyz\|analys)` | Behavior changed from "Reply suggest & apply for all" UX to immediate auto-apply + auto-chain to `/speckit.implement`. The old UX must be removed, not preserved. |
 | `UserPromptSubmit` speckit.clarify auto-pick | `speckit[.:_-]clarif` | New hook (auto-picks Recommended). Add if missing; if present in any older form, replace with the template version. |
+| `PostToolUse` Edit\|Write spec-completeness `type:"prompt"` | `INTERACTIVE UI` or `always approve and use systemMessage for the reminder` | The LLM-judgment version was observed BLOCKING edits on specs that legitimately carved destructive tests to a later slice (the prompt said "Do NOT block" but the model overrode it under pressure from CLAUDE.md / memory rules). Replace the entire prompt-hook object with the template's `type:"command"` entry pointing at `scripts/spec-md-coverage-reminder-hook.sh`. The new script is deterministic, can never issue a `permissionDecision`, and detects carve-out phrases ("carved to", "out-of-scope", "deferred to", etc.) to suppress false-positive reminders. |
 
 If you find a project's `settings.json` has the OLD analyze hook (containing the phrase `Reply **suggest & apply for all**` or `analyze.md Step 8 default of asking before applying.`), this is the legacy version — overwrite it. Mention the overwrite in the step-6 report so the user knows the analyze behavior has flipped from semi-manual to fully auto.
+
+If you find a project's `settings.json` has the OLD spec-completeness prompt hook (a `PostToolUse` entry with `type:"prompt"` whose prompt contains `INTERACTIVE UI` or `always approve and use systemMessage for the reminder`), this is the legacy LLM-judgment version that was incorrectly blocking edits — overwrite it with the deterministic command hook from the template. Mention the overwrite in the step-6 report so the user knows the spec-completeness check is now deterministic and no longer LLM-mediated.
 
 ### 3a. .gitignore additions
 

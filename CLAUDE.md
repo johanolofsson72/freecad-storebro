@@ -5,8 +5,8 @@
 - **ALWAYS** read the code first — base ALL conclusions on evidence from the codebase, not assumptions.
 - **ALWAYS** verify with `uv run pytest`, `uv run ruff check .`, and `uv run mypy src/` before claiming anything is "done".
 - **ALWAYS** use the Edit tool for surgical changes — never copy entire files.
-- **ALWAYS** run the full pipeline (`/specify` → `/clarify` → `/allium:elicit` → `/plan` → `/tasks` → `/speckit.analyze` → `/implement` → tests → `/tla`) for any non-trivial feature, refactor, or fix. The pipeline is ONE task — never stop between phases to ask permission. `/clarify` runs on ALL tracks; `/allium:elicit` runs on full/light tracks only. See `.claude/rules/feature-pipeline.md`. This is a **BLOCKING REQUIREMENT**.
-- **ALWAYS** consult `specs/INDEX.md` (the spec register) before starting feature work. Work the next unchecked spec end-to-end, then stop with a status summary. See `.claude/rules/spec-register.md`. This is a **BLOCKING REQUIREMENT**.
+- **ALWAYS** run the full pipeline (`/specify` → `/clarify` → `/allium:elicit` → `/plan` → `/tasks` → `/speckit.analyze` → `/implement` → tests → `/tla`) for any non-trivial feature, refactor, or fix. The pipeline is ONE task — never stop between phases to ask permission. `/clarify` runs on ALL tracks (auto-pick recommended) and catches underspecified requirements before `/plan`/`/tasks` lock them in; `/allium:elicit` runs on full/light tracks only. Trivial-fix bypass requires an explicit classification sentence. See `.claude/rules/feature-pipeline.md`. This is a **BLOCKING REQUIREMENT**.
+- **ALWAYS** consult `specs/INDEX.md` (the spec register) before starting feature work. Work the next unchecked spec end-to-end (pipeline → commit → push → tick the register), then stop with a status summary. The only legitimate mid-spec stops are real ambiguity, hard blockers, Allium/TLA+ findings, or a register-rewrite proposal. See `.claude/rules/spec-register.md`. This is a **BLOCKING REQUIREMENT**.
 - **ALWAYS** run generated text through the `humanizer` skill via the Skill tool BEFORE delivering to humans (documentation, commit messages, PR descriptions, README, CHANGELOG). This is a **BLOCKING REQUIREMENT**.
 - **ALWAYS** follow existing patterns in the codebase — look at similar functions first.
 - **ALWAYS** treat geometry as PARAMETRIC — no magic numbers in function bodies. Every dimension is a named parameter with a default. See constitution principle I.
@@ -65,15 +65,9 @@ Core flow: **parameters → FreeCAD B-rep geometry → editable .FCStd + exports
 - Restorers, scale modelers, and FreeCAD scripters need editable B-rep geometry, not flat PNGs or one-off `.FCStd` snapshots.
 - Build it once, ship it permissively (MIT), let the niche community extend.
 
-### Design principles (from constitution — non-negotiable)
+### Design principles
 
-1. **Parametric Everything** — no hard-coded geometry, every dimension is a named parameter.
-2. **Reproducibility** — same params → byte-identical output. Determinism is enforced.
-3. **FreeCAD-Idiomatic** — `Part` / `Sketch` / `Body`, never raw mesh hacks. Output stays editable in the FreeCAD GUI.
-4. **Reference Fidelity** — defaults match the historical Storebro proportions within ±1% on principal dimensions.
-5. **Test-Gated Releases** — `pytest` + `ruff` + `mypy --strict` are CI-enforced; visual verification is a PR description requirement.
-6. **Public OSS by Default** — MIT, semver, all decisions in public.
-7. **FreeCAD Version Discipline** — supported FreeCAD versions are explicit and CI-tested.
+Seven non-negotiable principles drive every design decision (parametric, reproducible, FreeCAD-idiomatic, reference-faithful, test-gated, public OSS, FreeCAD-version-disciplined). Authoritative source: `.specify/memory/constitution.md`. Summary: `.claude/docs/project.md`.
 
 ## Language
 
@@ -93,35 +87,7 @@ Core flow: **parameters → FreeCAD B-rep geometry → editable .FCStd + exports
 - **GitHub Actions** — CI: Ubuntu + macOS × Python 3.11 + 3.12
 - **PyPI** — distribution (`freecad-storebro`)
 
-### Source layout (src-layout)
-
-```
-src/storebro/
-  __init__.py       # public API surface, version
-  hull.py           # parametric hull
-  deck.py           # deck, cabin trunk, hardtop, railings
-  interior.py       # cabins, galley, heads, salon, Alternativ1-5
-  export.py         # STEP / STL / BREP / .FCStd writers
-  cli.py            # `storebro` CLI entry point
-  fixtures/         # canonical parameter sets (YAML)
-tests/
-  unit/             # pure-Python, no FreeCAD runtime
-  geometry/         # FreeCAD integration (pytest marker: requires_freecad)
-docs/
-  references/       # original cutaway drawings
-```
-
-### Integrations
-
-- FreeCAD Python API (sole external runtime dependency).
-- Standard CAD interchange formats via FreeCAD: STEP, STL, BREP, .FCStd.
-- No other integrations in scope for v1.0.
-
-## CI/CD and release
-
-- **CI on PR**: `uv run pytest`, `uv run ruff check .`, `uv run mypy src/` across Ubuntu + macOS × Python 3.11 + 3.12. FreeCAD installed in the runner.
-- **Release**: tag `vX.Y.Z` on `main` → GitHub Actions builds wheel + sdist via `hatchling`, uploads to PyPI with `twine`. PyPI token in GitHub Secrets.
-- **Changelog**: drafted by the local-LLM changelog hook from Conventional Commits, edited manually before tagging. Follows keep-a-changelog format.
+Source layout, integrations, CI/CD, and release details: `.claude/docs/project.md`.
 
 ## Workflow
 
@@ -206,19 +172,8 @@ Read these files WHEN you need them — do not load everything upfront:
 - **Spec testing checklist** → `.claude/docs/spec-testing-checklist.md`
 - **Feature pipeline** → `.claude/rules/feature-pipeline.md`
 - **Spec register** → `.claude/rules/spec-register.md`
-
-## File organization
-
-- **`src/storebro/`** — library source (src-layout).
-- **`tests/`** — pytest tests; `unit/` and `geometry/` subdirs.
-- **`docs/references/`** — original Storebro cutaway drawings (read-only assets).
-- **`docs/examples/`** — runnable example scripts.
-- **`scripts/`** — maintenance scripts and local-LLM hooks.
-- **`.claude/skills/`** — project skills with SKILL.md (Agent Skills standard).
-- **`.claude/agents/`** — subagents.
-- **`.claude/rules/`** — auto-loaded rules with path-scoped frontmatter.
-- **`.claude/docs/`** — reference material loaded on demand.
-- **`CLAUDE.local.md`** — personal project settings, gitignored.
+- **Project source layout, CI/CD, release** → `.claude/docs/project.md`
+- **Codebase knowledge graph (opt-in per project)** → `.claude/docs/graphify.md`
 
 ## Iterative improvement
 
@@ -226,3 +181,8 @@ Read these files WHEN you need them — do not load everything upfront:
 - Every code review comment is a signal that the agent lacked context — update CLAUDE.md.
 - Edit existing files over creating new ones.
 - Keep this file focused — if an instruction can be removed without Claude making errors, remove it.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
