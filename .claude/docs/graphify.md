@@ -22,18 +22,76 @@ If unsure: skip it. The template's existing flow (spec register, `/explore-codeb
 
 Covers the template's stack (.NET, React/TypeScript, Python). WordPress (`.php`) is covered. Razor (`.razor`, `.cshtml`) is not — Razor-heavy projects gain less.
 
-## Install (project-scoped)
+## Install (project-scoped) — cross-platform
 
-Run from the project root:
+The template ships `scripts/graphify-bootstrap.sh` which handles macOS, Linux (Debian/Ubuntu/Fedora/RHEL/Arch/openSUSE), and Windows Git Bash uniformly. Run from the project root:
 
 ```bash
-pip install graphifyy        # CLI is `graphify`, PyPI package is `graphifyy`
-graphify install --project   # writes .claude/skills/graphify/SKILL.md + PreToolUse hook entry
-graphify .                   # initial extraction → ./graphify-out/graph.json
-graphify hook install        # post-commit + post-checkout git hooks for auto-rebuild
+bash scripts/graphify-bootstrap.sh
 ```
 
+The script counts source files first and skips projects with fewer than 30 eligible files (install overhead exceeds savings). Pass `--force` to override or `--eligibility-check` to dry-run the count.
+
+If you need to run the steps manually, the cross-platform equivalents are:
+
+**macOS:**
+```bash
+brew install pipx && pipx ensurepath
+pipx install graphifyy
+graphify install --project
+graphify update .                # AST-only, no LLM key required
+graphify hook install
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt install -y pipx && pipx ensurepath
+pipx install graphifyy
+graphify install --project
+graphify update .
+graphify hook install
+```
+
+**Linux (Fedora/RHEL):**
+```bash
+sudo dnf install -y pipx && pipx ensurepath
+pipx install graphifyy
+graphify install --project
+graphify update .
+graphify hook install
+```
+
+**Linux (Arch):**
+```bash
+sudo pacman -S --noconfirm python-pipx && pipx ensurepath
+pipx install graphifyy
+graphify install --project
+graphify update .
+graphify hook install
+```
+
+**Windows Git Bash** (recommended over native PowerShell):
+```bash
+scoop install pipx              # or: winget install pipx
+pipx ensurepath
+pipx install graphifyy
+graphify install --project
+graphify update .
+graphify hook install
+```
+
+**Note on the extraction command:** earlier versions of this doc said `graphify .`, but as of `graphifyy 0.8.x` the bare command requires an LLM API key (Gemini/Claude/OpenAI/etc.) for the semantic clustering pass. Use `graphify update .` instead — same AST extraction, no API key, fully offline. The template's `graphify-bootstrap.sh` uses `update .` for exactly this reason.
+
 `graphify install --project` writes its own skill at `.claude/skills/graphify/SKILL.md` and adds a `PreToolUse` hook entry to the project's `.claude/settings.json` (or `settings.local.json`). Do not hand-write a wrapper skill in the template repo — Graphify ships its own and a parallel skill would conflict.
+
+## Token-savings telemetry
+
+The template ships two scripts that measure Graphify's ROI per project:
+
+- **`scripts/graphify-fire-hook.sh`** — PostToolUse Bash hook. Fires on `graphify (query|path|explain|update)` invocations and appends a TSV row to `.claude/graphify-fire.log`: `timestamp, subcommand, exit, arg_bytes, response_bytes, graph_nodes, graph_edges`. Wire it via the entry in `.claude/settings.json`'s PostToolUse Bash matcher block (see sync-prompt.md Step 5d).
+- **`scripts/graphify-stats.sh`** — Reads the fire log and prints per-subcommand fire counts, ok%, average argument and response sizes. Pass `--all` to aggregate across `~/repos/*` and `~/Projects/*`.
+
+Disable telemetry per-developer with `GRAPHIFY_TELEMETRY_DISABLE=1` in the shell profile. The hook becomes a silent no-op. The graphify-fire.log file is gitignored — telemetry never leaves the developer's machine.
 
 ## What gets written
 
@@ -61,9 +119,11 @@ Once installed, Claude calls these via the skill without prompting. They also wo
 graphify query "what connects the auth service to the database?"
 graphify path "UserService" "DatabasePool"     # shortest path between two symbols
 graphify explain "RateLimiter"                  # neighborhood of one symbol
-graphify . --update                             # re-extract changed files only
+graphify update .                               # re-extract changed files only (AST-only)
 graphify export callflow-html                   # render a callflow diagram
 ```
+
+Every one of these commands (except `export`) fires the telemetry hook, so the fire log accumulates an audit trail you can inspect with `bash scripts/graphify-stats.sh`.
 
 ## Privacy and cost
 
