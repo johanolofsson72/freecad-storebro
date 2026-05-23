@@ -9,6 +9,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUT=$(cat)
 
+# Per-hook timeout override — drafting tasks with 1536 num_predict on a
+# 14b/32b model regularly exceeds the global 15s default. Bumping to 60s
+# keeps the hook within the same wall-clock envelope as /tasks itself
+# would have spent generating the file from scratch.
+LOCAL_LLM_TIMEOUT="${LOCAL_LLM_TASKS_DRAFT_TIMEOUT:-60}"
+export LOCAL_LLM_TIMEOUT
+
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -n "$FILE" ] || exit 0
 

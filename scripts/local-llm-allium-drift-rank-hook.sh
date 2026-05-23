@@ -9,6 +9,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUT=$(cat)
 
+# Per-hook timeout override — drift reports up to 12KB get ranked with
+# num_predict=768. On a 32b model that comfortably exceeds the global 15s
+# default. 45s is enough headroom without blocking the conversation for
+# absurd lengths if ollama is sluggish.
+LOCAL_LLM_TIMEOUT="${LOCAL_LLM_ALLIUM_DRIFT_RANK_TIMEOUT:-45}"
+export LOCAL_LLM_TIMEOUT
+
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -n "$CMD" ] || exit 0
 

@@ -8,6 +8,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUT=$(cat)
 
+# Per-hook timeout override — same reasoning as tasks-draft. Plan drafts
+# emit 30-80 lines of structured sections; with num_predict=1536 on a 32b
+# model the wall-clock often exceeds 15s. 60s gives the model headroom.
+LOCAL_LLM_TIMEOUT="${LOCAL_LLM_PLAN_DRAFT_TIMEOUT:-60}"
+export LOCAL_LLM_TIMEOUT
+
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -n "$FILE" ] || exit 0
 

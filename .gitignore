@@ -48,3 +48,10 @@ storebro_v*_signoff.FCStd
 storebro_v*_signoff.step
 storebro_v*_signoff.stl
 storebro_v*_signoff.brep
+
+# Graphify knowledge-graph artifacts
+graphify-out/
+
+# Graphify telemetry — per-developer ephemeral
+.claude/graphify-*.log
+.claude/graphify-*.log.errors
