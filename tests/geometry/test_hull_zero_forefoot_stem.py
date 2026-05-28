@@ -1,0 +1,88 @@
+"""Spec 009 T010 — geometry tests for the thin-forefoot stem topology.
+
+Implementation drift (documented in StationTopology docstring + spec 009
+closure note): the spec's ``DEGENERATE_VERTEX`` topology was found to
+overshoot wildly under Ruled=False loft interpolation. The implementation
+substitutes ``PENTAGON_THIN_STEM`` — a 5-vertex pentagon with 5 mm
+half-width. Visually equivalent to "zero forefoot" at boat scale (10 mm
+stem face vs spec 007's 80 mm); topologically compatible with the
+B-spline loft.
+
+When ``station_count >= 8``, the stem station MUST use the thin pentagon.
+When ``station_count < 8``, the stem MUST retain the spec 007
+pentagon-with-80mm-forefoot topology.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from storebro.hull import (
+    THIN_STEM_HALF_WIDTH_M,
+    HullParameters,
+    build_hull,
+)
+
+pytestmark = pytest.mark.requires_freecad
+
+
+def _find_stem_sketch(body: object) -> object:
+    """Return the station sketch whose name (stripped of FreeCAD's auto-numbering
+    suffix) ends with 'Stem'."""
+    for obj in body.Group:  # type: ignore[attr-defined]
+        if obj.TypeId == "Sketcher::SketchObject":
+            base_name = obj.Name.rstrip("0123456789")
+            if base_name.endswith("Stem"):
+                return obj
+    raise AssertionError("no stem sketch found in HullBody")
+
+
+def _max_x_extent_mm(sketch: object) -> float:
+    """Return the maximum X-coordinate across all vertices in the sketch."""
+    max_x = 0.0
+    for geom in sketch.Geometry:  # type: ignore[attr-defined]
+        for attr in ("StartPoint", "EndPoint"):
+            pt = getattr(geom, attr, None)
+            if pt is not None:
+                max_x = max(max_x, abs(pt.x))
+    return max_x
+
+
+def test_default_stem_is_thin_pentagon() -> None:
+    """station_count=9 (default) → stem sketch has 5 line segments
+    and a maximum X-extent of THIN_STEM_HALF_WIDTH_M * 1000 mm."""
+    hull = build_hull()
+    stem = _find_stem_sketch(hull.body)
+    line_segments = [
+        g for g in stem.Geometry if g.TypeId == "Part::GeomLineSegment"
+    ]
+    assert len(line_segments) == 5
+    max_x_mm = _max_x_extent_mm(stem)
+    expected_mm = THIN_STEM_HALF_WIDTH_M * 1000.0
+    assert abs(max_x_mm - expected_mm) <= 1.0, (
+        f"stem half-width {max_x_mm} mm != expected {expected_mm} mm"
+    )
+
+
+def test_legacy_station_count_keeps_pentagon_stem() -> None:
+    """station_count=5 → stem sketch has 5 line segments and ~40 mm half-width."""
+    hull = build_hull(HullParameters(station_count=5))
+    stem = _find_stem_sketch(hull.body)
+    line_segments = [
+        g for g in stem.Geometry if g.TypeId == "Part::GeomLineSegment"
+    ]
+    assert len(line_segments) == 5
+    max_x_mm = _max_x_extent_mm(stem)
+    # spec 007 legacy stem half-width = 40 mm.
+    assert 35.0 <= max_x_mm <= 45.0, (
+        f"legacy stem half-width {max_x_mm} mm should be ~40 mm"
+    )
+
+
+def test_threshold_station_count_uses_thin_stem() -> None:
+    """station_count=8 (the threshold) → stem is the thin pentagon."""
+    hull = build_hull(HullParameters(station_count=8))
+    stem = _find_stem_sketch(hull.body)
+    max_x_mm = _max_x_extent_mm(stem)
+    expected_mm = THIN_STEM_HALF_WIDTH_M * 1000.0
+    assert abs(max_x_mm - expected_mm) <= 1.0

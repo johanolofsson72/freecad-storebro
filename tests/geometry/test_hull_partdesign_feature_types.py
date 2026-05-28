@@ -38,16 +38,22 @@ def test_hull_body_tip_is_mirror_feature(freecad_doc: Any) -> None:
 
 
 def test_hull_body_contains_expected_feature_types(freecad_doc: Any) -> None:
-    """Body's children are exactly: 1 Origin + 5 datum planes + 5 sketches + 1 AdditiveLoft + 1 Mirrored."""
+    """Body's children: 1 Origin + N datum planes + N sketches + 1 AdditiveLoft
+    + 1 Mirrored, where N = parameters.station_count (default 9 per spec 009;
+    was 5 in spec 007)."""
     hull = build_hull(document=freecad_doc)
     type_counts = Counter(obj.TypeId for obj in hull.body.Group)
 
+    # spec 009: station_count default = 9 (was 5 in spec 007).
+    expected_n = hull.parameters.station_count
+
     # PartDesign-derived counts
-    assert type_counts.get("PartDesign::Plane", 0) == 5, (
-        f"expected 5 PartDesign::Plane datums, got {type_counts.get('PartDesign::Plane', 0)}"
+    assert type_counts.get("PartDesign::Plane", 0) == expected_n, (
+        f"expected {expected_n} PartDesign::Plane datums, "
+        f"got {type_counts.get('PartDesign::Plane', 0)}"
     )
-    assert type_counts.get("Sketcher::SketchObject", 0) == 5, (
-        f"expected 5 Sketcher::SketchObject sketches, "
+    assert type_counts.get("Sketcher::SketchObject", 0) == expected_n, (
+        f"expected {expected_n} Sketcher::SketchObject sketches, "
         f"got {type_counts.get('Sketcher::SketchObject', 0)}"
     )
     assert type_counts.get("PartDesign::AdditiveLoft", 0) == 1

@@ -1,0 +1,375 @@
+-- allium: 3
+--
+-- Spec 009 — hull-surface-smoothness (post-implementation, v1.0.3)
+--
+-- Track: full. Originally elicited 2026-05-28. Updated 2026-05-28 to reflect
+-- implementation reality after three discovery findings during /implement
+-- (B-spline loft unstable, bilge arc breaks STL tessellation, degenerate
+-- vertex stem causes the dominant B-spline overshoot). Resolutions, per user
+-- decision via AskUserQuestion: all three deferred to v1.1+; spec.allium
+-- updated to match the v1.0.3 implementation. The pre-implementation
+-- aspirations are preserved as `deferred` markers below.
+
+config {
+    default_station_count: Integer = 9
+    default_bilge_radius_m: Decimal = 0.10
+    station_count_min: Integer = 3
+    station_count_max: Integer = 21
+    b_spline_station_count_threshold: Integer = 8
+    overshoot_tolerance_mm: Decimal = 1.0
+    pillar_seating_tolerance_mm: Decimal = 1.0
+    reference_fidelity_tolerance_pct: Decimal = 1.0
+    hull_build_time_budget_seconds: Decimal = 10.0
+    thin_stem_half_width_m: Decimal = 0.005
+}
+
+enum LoftType { ruled_true | ruled_false }
+
+enum StationTopology {
+    pentagon_thin_stem
+    | pentagon_legacy
+    | pentagon_with_arc
+}
+
+external entity DeckPlate { top_z_resolver_uses_actual_geometry: Boolean }
+external entity DeckSuperstructureBundle { deck_plate: DeckPlate }
+
+value HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    freeboard: Decimal
+    deadrise_amidships: Decimal
+    sheer_height_aft: Decimal
+    sheer_height_fwd: Decimal
+    transom_angle: Decimal
+    stem_rake_angle: Decimal
+    station_count: Integer
+    bilge_radius: Decimal
+
+    uses_b_spline_loft: Boolean
+    uses_zero_forefoot_stem: Boolean
+    uses_bilge_arc: Boolean
+    max_bilge_radius: Decimal
+
+    invariant LegacyDimensionsPositive {
+        this.loa > 0
+        this.beam_max > 0
+        this.draft > 0
+    }
+
+    invariant StationCountInRange {
+        this.station_count >= 3
+        this.station_count <= 21
+    }
+
+    invariant BilgeRadiusNonNegative {
+        this.bilge_radius >= 0
+    }
+
+    invariant BilgeRadiusFitsCrossSection {
+        this.bilge_radius <= this.max_bilge_radius
+    }
+
+    invariant MaxBilgeRadiusFollowsBeamAndDraft {
+        this.max_bilge_radius <= this.beam_max / 2
+        this.max_bilge_radius <= this.draft
+    }
+
+    invariant BSplineFlagIsAlwaysFalseInV103 {
+        -- Spec drift: original spec wired this to (station_count >= 8).
+        -- Implementation reality: B-spline deferred to v1.1+.
+        this.uses_b_spline_loft = false
+    }
+
+    invariant ZeroForefootFlagFollowsStationCount {
+        this.uses_zero_forefoot_stem = (this.station_count >= 8)
+    }
+
+    invariant BilgeArcFlagIsAlwaysFalseInV103 {
+        -- Spec drift: original spec wired this to (bilge_radius > 0).
+        -- Implementation reality: bilge arc deferred to v1.1+.
+        this.uses_bilge_arc = false
+    }
+}
+
+entity HullBody {
+    parameters: HullParameters
+    station_count_actual: Integer
+    loft_type: LoftType
+    is_partdesign_body: Boolean
+    is_closed_shape: Boolean
+    shape_volume_m3: Decimal
+    tip_is_mirrored_feature: Boolean
+    silhouette_within_1pct_of_reference: Boolean
+    bbox_overshoot_at_any_station_mm: Decimal
+
+    stations: StationSketch with parent = this
+    stem_station: stations where index = 0
+    non_stem_stations: stations where index > 0
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.is_closed_shape = true
+        this.shape_volume_m3 > 0
+    }
+
+    invariant TipIsMirrored {
+        this.tip_is_mirrored_feature = true
+    }
+
+    invariant StationCountMatchesParameters {
+        this.station_count_actual = this.parameters.station_count
+    }
+
+    invariant LoftTypeIsAlwaysRuledTrueInV103 {
+        -- Spec drift: original spec said Ruled=False when uses_b_spline_loft.
+        -- Implementation reality: always Ruled=True.
+        this.loft_type = ruled_true
+    }
+
+    invariant ReferenceFidelityHolds {
+        this.silhouette_within_1pct_of_reference = true
+    }
+
+    invariant NoBSplineOvershoot {
+        this.bbox_overshoot_at_any_station_mm <= 1.0
+    }
+}
+
+entity StationSketch {
+    parent: HullBody
+    index: Integer
+    x_position_mm: Decimal
+    topology: StationTopology
+    vertex_count: Integer
+    is_partdesign_sketch: Boolean
+
+    invariant ValidSketch {
+        this.is_partdesign_sketch = true
+        this.index >= 0
+        this.index < this.parent.station_count_actual
+    }
+}
+
+-- ------------------------------------------------------------------
+-- Rules — parameter validation and the build operation.
+-- ------------------------------------------------------------------
+
+rule ValidateHullParameters {
+    when: BuildHull(params)
+    requires:
+        params.station_count >= 3
+        params.station_count <= 21
+        params.bilge_radius >= 0
+        params.bilge_radius <= params.beam_max / 2
+        params.bilge_radius <= params.draft
+        params.loa > 0
+        params.beam_max > 0
+        params.draft > 0
+}
+
+rule BuildHullWithRuledTrueLoft {
+    -- v1.0.3 implementation: always Ruled=True regardless of station_count.
+    when: BuildHull(params)
+    ensures:
+        HullBody.created(
+            parameters: params,
+            station_count_actual: params.station_count,
+            loft_type: ruled_true,
+            is_partdesign_body: true,
+            is_closed_shape: true,
+            tip_is_mirrored_feature: true,
+            silhouette_within_1pct_of_reference: true
+        )
+}
+
+rule BuildStemStationThinPentagon {
+    -- Implementation drift: spec said DEGENERATE_VERTEX. Substituted by
+    -- PENTAGON_THIN_STEM (5 vertices, half-width = 5 mm).
+    when: BuildStation(hull, index)
+    requires:
+        index = 0
+        hull.parameters.uses_zero_forefoot_stem = true
+    ensures:
+        StationSketch.created(
+            parent: hull,
+            index: 0,
+            topology: pentagon_thin_stem,
+            vertex_count: 5,
+            is_partdesign_sketch: true
+        )
+}
+
+rule BuildStemStation80mmForefoot {
+    when: BuildStation(hull, index)
+    requires:
+        index = 0
+        hull.parameters.uses_zero_forefoot_stem = false
+    ensures:
+        StationSketch.created(
+            parent: hull,
+            index: 0,
+            topology: pentagon_legacy,
+            vertex_count: 5,
+            is_partdesign_sketch: true
+        )
+}
+
+rule BuildNonStemStationLegacyPentagon {
+    -- Implementation drift: spec branched between PENTAGON_WITH_ARC and
+    -- SHARP_CHINE_QUADRILATERAL. Implementation always uses PENTAGON_LEGACY
+    -- for non-stem stations because the bilge arc is deferred.
+    when: BuildStation(hull, index)
+    requires:
+        index > 0
+    ensures:
+        StationSketch.created(
+            parent: hull,
+            index: index,
+            topology: pentagon_legacy,
+            vertex_count: 5,
+            is_partdesign_sketch: true
+        )
+}
+
+rule OvershootDetectionIsNoOp {
+    -- Implementation drift: spec said fail-fast on overshoot.
+    -- Implementation: no-op (Ruled=True cannot overshoot by construction).
+    when: BuildHull(params)
+    ensures:
+        OvershootCheckSkipped()
+}
+
+rule DeterministicStepExport {
+    when: ExportStep(hull, output_path)
+    requires: hull.is_closed_shape = true
+    ensures:
+        StepBytesAreDeterministic(hull, output_path)
+}
+
+rule DeterministicBrepExport {
+    when: ExportBrep(hull, output_path)
+    requires: hull.is_closed_shape = true
+    ensures:
+        BrepBytesAreDeterministic(hull, output_path)
+}
+
+rule DeterministicStlExport {
+    when: ExportStl(hull, output_path)
+    requires: hull.is_closed_shape = true
+    ensures:
+        StlBytesAreDeterministic(hull, output_path)
+}
+
+rule CliFlagsUnchanged {
+    when: ParseCliArgs(argv)
+    ensures:
+        CliFlagSetEqualsV102()
+}
+
+rule ConstructWithoutNewFieldsUsesDefaults {
+    when: HullParameters.constructed_without_new_fields(legacy_args)
+    ensures:
+        HullParameters.created(
+            station_count: config.default_station_count,
+            bilge_radius: config.default_bilge_radius_m
+        )
+}
+
+rule BuildTimeBudget {
+    when: BuildHull(params)
+    ensures:
+        HullBuildElapsedSecondsWithinBudget(params)
+}
+
+-- ------------------------------------------------------------------
+-- Global invariants (distilled from implementation behavior).
+-- ------------------------------------------------------------------
+
+invariant AllHullsAreValidPartDesignBodies {
+    for h in HullBody:
+        h.is_partdesign_body = true
+        h.is_closed_shape = true
+        h.shape_volume_m3 > 0
+}
+
+invariant AllHullsHaveMirroredTip {
+    for h in HullBody:
+        h.tip_is_mirrored_feature = true
+}
+
+invariant AllStationsBelongToValidHullBody {
+    for s in StationSketch:
+        s.index >= 0
+        s.index < s.parent.station_count_actual
+        s.is_partdesign_sketch = true
+}
+
+invariant StemStationsAreThinPentagonWhenZeroForefootEnabled {
+    for s in StationSketch where s.index = 0 and s.parent.parameters.uses_zero_forefoot_stem:
+        s.topology = pentagon_thin_stem
+        s.vertex_count = 5
+}
+
+invariant StemStations80mmForefootWhenLegacy {
+    for s in StationSketch where s.index = 0 and not s.parent.parameters.uses_zero_forefoot_stem:
+        s.topology = pentagon_legacy
+        s.vertex_count = 5
+}
+
+invariant NonStemStationsAreAlwaysPentagonLegacyInV103 {
+    for s in StationSketch where s.index > 0:
+        s.topology = pentagon_legacy
+        s.vertex_count = 5
+}
+
+invariant LoftTypeIsAlwaysRuledTrue {
+    for h in HullBody:
+        h.loft_type = ruled_true
+}
+
+invariant ReferenceFidelityWithinOnePercent {
+    for h in HullBody:
+        h.silhouette_within_1pct_of_reference = true
+}
+
+invariant NoBSplineOvershootEver {
+    for h in HullBody:
+        h.bbox_overshoot_at_any_station_mm <= 1.0
+}
+
+invariant DeckPillarSeatingContractPreserved {
+    for b in DeckSuperstructureBundle:
+        b.deck_plate.top_z_resolver_uses_actual_geometry = true
+}
+
+-- ------------------------------------------------------------------
+-- Actor + surface (distilled from the public API).
+-- ------------------------------------------------------------------
+
+actor LibraryConsumer { identified_by: HullParameters }
+
+surface HullModuleApi {
+    facing consumer: LibraryConsumer
+    context params: HullParameters
+    provides: BuildHull(params)
+    exposes:
+        HullBody
+        consumer.loa
+        consumer.beam_max
+        consumer.station_count
+        consumer.bilge_radius
+}
+
+-- ------------------------------------------------------------------
+-- Deferred — items the implementation does NOT do but tracks for v1.1+.
+-- ------------------------------------------------------------------
+
+deferred HullBody.non_uniform_station_spacing
+deferred HullModuleApi.cli_flags_for_station_count_and_bilge_radius
+deferred HullBody.cross_invocation_fcstd_byte_determinism
+deferred HullBody.b_spline_loft
+deferred HullBody.bilge_arc
+deferred HullBody.degenerate_vertex_stem
+deferred HullModuleApi.fcstd_determinism_under_large_test_suite

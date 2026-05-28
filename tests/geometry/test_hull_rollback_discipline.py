@@ -39,7 +39,7 @@ def test_rollback_removes_body_when_loft_fails(
     """Forced failure in _apply_loft_and_mirror leaves zero PartDesign artifacts."""
     objects_before = _count_partdesign_objects(freecad_doc)
 
-    def boom(_body: Any, _sketches: list[Any]) -> tuple[Any, Any]:
+    def boom(_body: Any, _sketches: list[Any], _parameters: Any) -> tuple[Any, Any]:
         raise RuntimeError("forced loft failure for rollback test")
 
     monkeypatch.setattr(hull_mod, "_apply_loft_and_mirror", boom)

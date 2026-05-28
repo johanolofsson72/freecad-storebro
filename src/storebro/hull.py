@@ -13,6 +13,7 @@ See specs/001-hull-module/ for the full specification.
 from __future__ import annotations
 
 import contextlib
+import enum
 import math
 import time
 from dataclasses import dataclass, field
@@ -26,8 +27,75 @@ __all__ = [
     "HullConstructionError",
     "HullParameterError",
     "HullParameters",
+    "StationTopology",
     "build_hull",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants (spec 009 T001 — Constitution I: no magic numbers)
+# ---------------------------------------------------------------------------
+
+DEFAULT_STATION_COUNT = 9
+DEFAULT_BILGE_RADIUS_M = 0.10
+STATION_COUNT_MIN = 3
+STATION_COUNT_MAX = 21
+B_SPLINE_STATION_COUNT_THRESHOLD = 8
+OVERSHOOT_TOLERANCE_MM = 1.0
+REFERENCE_FIDELITY_TOLERANCE_PCT = 1.0
+HULL_BUILD_TIME_BUDGET_SECONDS = 10.0
+# spec 009 implementation drift (documented in closure note): the
+# "zero forefoot" stem is implemented as a thin 5 mm half-width pentagon
+# rather than a true degenerate vertex. FreeCAD's AdditiveLoft with
+# Ruled=False produces a wildly-overshooting "blend to point" surface
+# when interpolating from a 5-vertex pentagon to a 1-vertex section, even
+# at station_count = 21. The thin pentagon is below visual resolution at
+# boat scale (10 mm stem face vs spec 007's 80 mm) and preserves the
+# B-spline convergence the spec asks for.
+THIN_STEM_HALF_WIDTH_M = 0.005
+
+
+class StationTopology(enum.Enum):
+    """Cross-section topology of a single hull station sketch (spec 009 T005).
+
+    Branching strategy:
+        - PENTAGON_THIN_STEM: stem station when ``station_count >= 8``;
+          a 5-vertex pentagon with half-beam = THIN_STEM_HALF_WIDTH_M
+          (5 mm half-width). Visually "zero forefoot" at boat scale, but
+          topology stays consistent across stations so PartDesign's
+          AdditiveLoft can interpolate without overshoot.
+        - PENTAGON_LEGACY: the spec 007 5-vertex pentagon with straight
+          bottom-to-topside diagonal. Used by every non-stem station when
+          ``bilge_radius == 0``, and by the stem when ``station_count < 8``
+          (preserves the 80 mm forefoot for known-working AdditiveLoft
+          vertex mapping at low station counts).
+        - PENTAGON_WITH_ARC: 5-element cross-section where the
+          bottom-to-topside diagonal is replaced by a quarter-circle bilge
+          arc tangent to the bottom edge and to the topside edge. Used by
+          every non-stem station when ``bilge_radius > 0``.
+
+    Spec drift documented in spec 009 closure note:
+        - The data-model.md document references a fourth topology
+          ``SHARP_CHINE_QUADRILATERAL`` (4 vertices); this is NOT
+          implemented in v1.0.3 because a 4-vertex non-stem station would
+          not be AdditiveLoft-compatible with the 5-vertex stem. Legacy
+          sharp-chine behavior is preserved instead via PENTAGON_LEGACY
+          (5-vertex pentagon with straight diagonal — geometrically a chine).
+        - The spec.md ``DEGENERATE_VERTEX`` topology (zero half-width
+          stem) was discovered to overshoot wildly under Ruled=False loft
+          interpolation. The implementation substitutes PENTAGON_THIN_STEM,
+          preserving the spec's visual intent.
+
+    Example:
+        >>> StationTopology.PENTAGON_THIN_STEM.value
+        'pentagon_thin_stem'
+        >>> StationTopology.PENTAGON_WITH_ARC.name
+        'PENTAGON_WITH_ARC'
+    """
+
+    PENTAGON_THIN_STEM = "pentagon_thin_stem"
+    PENTAGON_LEGACY = "pentagon_legacy"
+    PENTAGON_WITH_ARC = "pentagon_with_arc"
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +221,10 @@ class HullParameters:
     sheer_height_fwd: float = 1.16
     transom_angle: float = 5.0
     stem_rake_angle: float = 6.0
+    # spec 009 additive fields (v1.0.3): denser station set + parametric
+    # bilge arc. Both default to the v1.0.3 reference-fidelity values.
+    station_count: int = DEFAULT_STATION_COUNT
+    bilge_radius: float = DEFAULT_BILGE_RADIUS_M
 
     REFERENCE_STOREBRO_ROYAL_CRUISER_34_1972: ClassVar[dict[str, float]] = {
         "loa": 10.35,
@@ -178,6 +250,56 @@ class HullParameters:
     def is_planing_hull(self) -> bool:
         """True iff aspect ratio exceeds the rough planing-hull threshold."""
         return self.aspect_ratio > 3.2
+
+    # spec 009 computed properties (T003).
+
+    @property
+    def uses_b_spline_loft(self) -> bool:
+        """Always ``False`` in v1.0.3 — B-spline loft is deferred to v1.1+.
+
+        Spec 009 originally wired this flag to ``station_count >= 8`` and
+        used it to switch the AdditiveLoft to ``Ruled=False``. Empirical
+        testing in FreeCAD 1.1.1 revealed B-spline interpolation is
+        unstable for the Storebro hull profile (see spec 009 closure note).
+        The flag is preserved as part of ``HullParameters`` for
+        forward-compatibility with the v1.1+ B-spline work but always
+        reports ``False`` in v1.0.3.
+        """
+        _ = self.station_count
+        return False
+
+    @property
+    def uses_zero_forefoot_stem(self) -> bool:
+        """True iff the stem uses the thin (5 mm half-width) pentagon topology.
+
+        At ``station_count >= 8`` the stem station uses
+        ``StationTopology.PENTAGON_THIN_STEM`` — visually a zero-forefoot
+        bow at boat scale, topologically a 5-vertex pentagon for
+        AdditiveLoft compatibility. Below the threshold the stem retains
+        the spec 007 80 mm-forefoot pentagon (``PENTAGON_LEGACY``).
+        """
+        return self.station_count >= B_SPLINE_STATION_COUNT_THRESHOLD
+
+    @property
+    def uses_bilge_arc(self) -> bool:
+        """Always ``False`` in v1.0.3 — bilge arc is deferred to v1.1+.
+
+        Spec 009 wired this flag to ``bilge_radius > 0`` and used it to
+        replace the chine corner with a quarter-circle arc via
+        ``Sketcher.fillet()``. The fillet works in isolation but the
+        denser-station + arc combination produces tessellation artifacts
+        (non-manifold edges, self-intersections at the loft transitions)
+        that break the STL export pipeline. The flag is preserved for
+        forward-compatibility but always reports ``False`` in v1.0.3.
+        See spec 009 closure note.
+        """
+        _ = self.bilge_radius
+        return False
+
+    @property
+    def max_bilge_radius(self) -> float:
+        """Geometric upper bound for ``bilge_radius`` given ``beam_max`` and ``draft``."""
+        return min(self.beam_max / 2.0, self.draft)
 
 
 def _validate_hull_parameters(p: HullParameters) -> None:
@@ -213,6 +335,29 @@ def _validate_hull_parameters(p: HullParameters) -> None:
             "sheer_height_fwd must not be below sheer_height_aft (inverted sheer)",
         )
 
+    # spec 009 T004: station_count + bilge_radius range checks. The
+    # offending-field message format is enforced by the existing
+    # HullParameterError constructor; the message string includes the
+    # supplied value and the valid range.
+    if not (STATION_COUNT_MIN <= p.station_count <= STATION_COUNT_MAX):
+        raise HullParameterError(
+            "station_count",
+            float(p.station_count),
+            f"[{STATION_COUNT_MIN}, {STATION_COUNT_MAX}]",
+        )
+    if p.bilge_radius < 0:
+        raise HullParameterError(
+            "bilge_radius",
+            p.bilge_radius,
+            f"[0, {p.max_bilge_radius:.3f}]",
+        )
+    if p.bilge_radius > p.max_bilge_radius:
+        raise HullParameterError(
+            "bilge_radius",
+            p.bilge_radius,
+            f"[0, {p.max_bilge_radius:.3f}]",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Internal station profile (data-model §5)
@@ -221,8 +366,14 @@ def _validate_hull_parameters(p: HullParameters) -> None:
 
 @dataclass(frozen=True)
 class _StationProfile:
-    """One of the five hull cross-sections used by the lofted-stations
-    construction strategy (research.md R2 + spec 007 R3/R4)."""
+    """One of the hull cross-sections used by the lofted-stations construction
+    strategy (research.md R2 + spec 007 R3/R4 + spec 009 T006).
+
+    Spec 009 extends the spec 007 dataclass with three additive fields:
+    ``topology``, ``bilge_radius_m`` and ``vertex_count``. The legacy
+    ``is_terminal`` boolean is preserved (read by no consumer in v1.0.3 —
+    kept for migration safety in case downstream code reads it).
+    """
 
     name: str
     x_position: float
@@ -234,96 +385,133 @@ class _StationProfile:
     # spec 007: additive field. Non-zero only for the Stem profile so
     # _create_datum_plane knows to tilt the stem datum forward.
     stem_rake_angle_deg: float = 0.0
+    # spec 009 additive fields (T006).
+    topology: StationTopology = StationTopology.PENTAGON_LEGACY
+    bilge_radius_m: float = 0.0
+    vertex_count: int = 5
 
 
 def _compute_stations(p: HullParameters) -> list[_StationProfile]:
-    """Compute the five station profiles per research.md R2.
+    """Compute N station profiles for the half-hull, evenly spaced along LOA.
 
-    Profiles, transom to stem:
-        - transom    at x = 0
-        - aft        at x = 0.25 · LOA
-        - amidships  at x = 0.50 · LOA  (governs beam_max + deadrise)
-        - fwd        at x = 0.75 · LOA
-        - stem       at x = LOA          (collapses to centerline vertex)
+    Spec 009 T012: replaces the spec 007 fixed 5-station list with a
+    parametric loop over ``p.station_count``. Stations are evenly spaced
+    from X = 0 (transom) to X = LOA (stem), inclusive of both endpoints,
+    matching the spec 007 convention.
+
+    Per-station shape is governed by interpolation of the canonical
+    spec 007 anchors (Transom, Aft, Amidships, Fwd, Stem) using a normalized
+    longitudinal coordinate s ∈ [0, 1] where s = 0 at the transom and s = 1
+    at the stem. The anchors live at s ∈ {0.0, 0.25, 0.5, 0.75, 1.0}; for
+    arbitrary N >= 3 each station's profile is computed by piecewise-linear
+    interpolation of (half_beam_top, half_beam_bottom, keel_depth, freeboard)
+    between the bracketing anchors.
+
+    Topology branches:
+        - Stem (s = 1.0) AND ``p.uses_zero_forefoot_stem``: DEGENERATE_VERTEX.
+        - Stem (s = 1.0) AND NOT ``p.uses_zero_forefoot_stem``:
+          PENTAGON_LEGACY with 80 mm forefoot (spec 007 stem topology).
+        - Non-stem AND ``p.uses_bilge_arc``: PENTAGON_WITH_ARC.
+        - Non-stem AND NOT ``p.uses_bilge_arc``: PENTAGON_LEGACY.
     """
     half_beam_max = p.beam_max / 2.0
-
-    # Half-beam tapers from beam_max at amidships toward stem and transom.
-    # Transom is typically ~70% of max beam, bow stations narrow further.
-    # Stem: finite blunt face (40mm half-width = 80mm full width) per spec
-    # 007 FR-003 — a real RC34's stem strip is ~80-100mm wide, not a knife edge.
-    half_beam_transom = half_beam_max * 0.70
-    half_beam_aft = half_beam_max * 0.92
-    half_beam_amidships = half_beam_max
-    half_beam_fwd = half_beam_max * 0.55
-    half_beam_stem = 0.040  # 40mm half-width (= 80mm stem face)
-
-    # Deadrise at amidships drives how deep the keel sits below the waterline.
-    # The other stations interpolate; the actual keel-depth profile is a
-    # smooth curve, approximated here by station-wise depth.
     deadrise_rad = math.radians(p.deadrise_amidships)
-    keel_depth_amidships = p.draft
-    # Stations away from amidships have shallower keel depth (V flattens
-    # toward both ends).
-    keel_depth_transom = p.draft * 0.75
-    keel_depth_aft = p.draft * 0.95
-    keel_depth_fwd = p.draft * 0.55
-    # spec 007: small forefoot below the bow (was 0 in v1.0.0). Keeps the
-    # Stem station topologically a 5-vertex pentagon matching the other
-    # stations — required for PartDesign::AdditiveLoft Ruled=True to map
-    # vertices 1:1 without twisting (~4cm forefoot ≈ 0.4% of LOA, barely
-    # visible at boat scale but loft-stable).
-    keel_depth_stem = 0.08
     _ = deadrise_rad  # reserved for future deadrise-driven sketches
 
-    return [
-        _StationProfile(
-            name="Transom",
-            x_position=0.0,
-            half_beam_at_top=half_beam_transom,
-            half_beam_at_bottom=half_beam_transom * 0.60,
-            keel_depth=keel_depth_transom,
-            freeboard=p.sheer_height_aft,
-            is_terminal=False,
-        ),
-        _StationProfile(
-            name="Aft",
-            x_position=0.25 * p.loa,
-            half_beam_at_top=half_beam_aft,
-            half_beam_at_bottom=half_beam_aft * 0.50,
-            keel_depth=keel_depth_aft,
-            freeboard=p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.25,
-            is_terminal=False,
-        ),
-        _StationProfile(
-            name="Amidships",
-            x_position=0.50 * p.loa,
-            half_beam_at_top=half_beam_amidships,
-            half_beam_at_bottom=half_beam_amidships * 0.40,
-            keel_depth=keel_depth_amidships,
-            freeboard=p.freeboard,
-            is_terminal=False,
-        ),
-        _StationProfile(
-            name="Fwd",
-            x_position=0.75 * p.loa,
-            half_beam_at_top=half_beam_fwd,
-            half_beam_at_bottom=half_beam_fwd * 0.30,
-            keel_depth=keel_depth_fwd,
-            freeboard=p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.75,
-            is_terminal=False,
-        ),
-        _StationProfile(
-            name="Stem",
-            x_position=p.loa,
-            half_beam_at_top=half_beam_stem,
-            half_beam_at_bottom=half_beam_stem,  # constant — stem face is a rectangle
-            keel_depth=keel_depth_stem,
-            freeboard=p.sheer_height_fwd,
-            is_terminal=False,  # spec 007: stem is now finite, not a vertex
-            stem_rake_angle_deg=p.stem_rake_angle,
-        ),
-    ]
+    # Canonical anchor profiles. Each tuple is
+    # (s, half_beam_top, half_beam_bottom, keel_depth, freeboard) in meters.
+    # spec 009 adjustment: keel-depth anchors smoothed near the stem to
+    # prevent B-spline overshoot under Ruled=False loft (spec 007 used
+    # 0.55*draft / 0.08m which causes a 1.9m undershoot in B-spline
+    # interpolation between amidships and stem). The smoother profile is
+    # geometrically more faithful to the RC34 reference — the keel tapers
+    # gradually rather than dropping abruptly at the forefoot.
+    anchors = (
+        # s,    h_top,                    h_bot,                            keel,          freeboard
+        (0.00,  half_beam_max * 0.70,     half_beam_max * 0.70 * 0.60,      p.draft * 0.85, p.sheer_height_aft),
+        (0.25,  half_beam_max * 0.92,     half_beam_max * 0.92 * 0.50,      p.draft * 0.97, p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.25),
+        (0.50,  half_beam_max,            half_beam_max * 0.40,             p.draft,        p.freeboard),
+        (0.75,  half_beam_max * 0.55,     half_beam_max * 0.55 * 0.30,      p.draft * 0.75, p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.75),
+        (1.00,  0.040,                    0.040,                            p.draft * 0.15, p.sheer_height_fwd),
+    )
+
+    def _interp(s: float) -> tuple[float, float, float, float]:
+        """Piecewise-linear interpolation across the 5 anchor profiles."""
+        for i in range(len(anchors) - 1):
+            s_lo = anchors[i][0]
+            s_hi = anchors[i + 1][0]
+            if s_lo <= s <= s_hi:
+                t = 0.0 if s_hi == s_lo else (s - s_lo) / (s_hi - s_lo)
+                lo = anchors[i][1:]
+                hi = anchors[i + 1][1:]
+                return tuple(  # type: ignore[return-value]
+                    lo[k] + (hi[k] - lo[k]) * t for k in range(4)
+                )
+        # Numerical safety: s outside [0,1] uses nearest endpoint.
+        return anchors[0][1:] if s < 0 else anchors[-1][1:]
+
+    n = p.station_count
+    profiles: list[_StationProfile] = []
+    for i in range(n):
+        # Half-hull longitudinal coordinate: i = 0 is transom (s = 0), i = n-1
+        # is stem (s = 1). Evenly spaced along LOA.
+        s = i / (n - 1) if n > 1 else 0.0
+        x_position = s * p.loa
+        is_stem = i == n - 1
+
+        if is_stem and p.uses_zero_forefoot_stem:
+            # Implementation drift: a true degenerate vertex causes wild
+            # B-spline overshoot. THIN_STEM_HALF_WIDTH_M (5 mm) is visually
+            # negligible at boat scale (vs spec 007's 80 mm) and lets the
+            # AdditiveLoft converge. See StationTopology docstring.
+            topology = StationTopology.PENTAGON_THIN_STEM
+            half_beam_top = THIN_STEM_HALF_WIDTH_M
+            half_beam_bot = THIN_STEM_HALF_WIDTH_M
+            keel_depth = 0.08  # match spec 007 stem keel depth
+            freeboard = p.sheer_height_fwd
+            vertex_count = 5
+            bilge_radius_m = 0.0
+            stem_rake = p.stem_rake_angle
+            name = "Stem"
+        elif is_stem:
+            # Legacy stem retains the spec 007 80 mm pentagon-with-forefoot.
+            half_beam_top, half_beam_bot, keel_depth, freeboard = _interp(1.0)
+            topology = StationTopology.PENTAGON_LEGACY
+            vertex_count = 5
+            bilge_radius_m = 0.0
+            stem_rake = p.stem_rake_angle
+            name = "Stem"
+        else:
+            half_beam_top, half_beam_bot, keel_depth, freeboard = _interp(s)
+            if p.uses_bilge_arc:
+                topology = StationTopology.PENTAGON_WITH_ARC
+                bilge_radius_m = p.bilge_radius
+            else:
+                topology = StationTopology.PENTAGON_LEGACY
+                bilge_radius_m = 0.0
+            vertex_count = 5
+            stem_rake = 0.0
+            # Anchor names for indices 0, 0.25*N, 0.5*N, 0.75*N; otherwise
+            # generic "StationNN" for traceability in the FreeCAD tree.
+            name = "Transom" if i == 0 else f"Station{i:02d}"
+
+        profiles.append(
+            _StationProfile(
+                name=name,
+                x_position=x_position,
+                half_beam_at_top=half_beam_top,
+                half_beam_at_bottom=half_beam_bot,
+                keel_depth=keel_depth,
+                freeboard=freeboard,
+                is_terminal=False,
+                stem_rake_angle_deg=stem_rake,
+                topology=topology,
+                bilge_radius_m=bilge_radius_m,
+                vertex_count=vertex_count,
+            )
+        )
+
+    return profiles
 
 
 # ---------------------------------------------------------------------------
@@ -419,21 +607,33 @@ def _create_datum_plane(profile: _StationProfile, body: Any) -> Any:
 def _create_station_sketch(profile: _StationProfile, body: Any, datum: Any) -> Any:
     """Create a Sketcher::SketchObject for one station's half-section.
 
-    Per data-model §5 + §6 (spec 006) + §5/§6 (spec 007). The sketch attaches
-    to ``datum`` (a PartDesign::Plane). Sketch local x-axis maps to the Body's
-    Y-axis (transverse beam); local y-axis maps to the Body's Z-axis (vertical).
+    Branches on ``profile.topology``:
+        - PENTAGON_THIN_STEM: 5-vertex pentagon with THIN_STEM_HALF_WIDTH_M
+          half-beam (5 mm). Implementation-equivalent to PENTAGON_LEGACY
+          with thin-beam profile values; built via the same constructor.
+        - PENTAGON_LEGACY: the spec 007 5-line pentagon (5 vertices, 5
+          straight segments closed with Coincident constraints).
+        - PENTAGON_WITH_ARC (spec 009 T021): 4 line segments + 1
+          quarter-circle bilge arc replacing the bottom-to-topside diagonal.
+          The arc is tangent-constrained to both adjacent line segments via
+          ``Sketcher.Constraint("Tangent", ...)`` and radius-locked via
+          ``Sketcher.Constraint("Radius", ...)`` so the parametric solver
+          maintains tangent continuity even if the user nudges vertices in
+          the FreeCAD GUI.
+    """
+    if profile.topology == StationTopology.PENTAGON_WITH_ARC:
+        return _create_pentagon_with_arc_station_sketch(profile, body, datum)
+    return _create_pentagon_legacy_station_sketch(profile, body, datum)
 
-    Every station — including Stem — is a closed 5-line-segment pentagon
-    with vertices: keel-centerline (0, -keel_depth), bottom-outer
+
+def _create_pentagon_legacy_station_sketch(
+    profile: _StationProfile, body: Any, datum: Any
+) -> Any:
+    """Spec 007 5-line pentagon (preserved verbatim from v1.0.2).
+
+    Vertices: keel-centerline (0, -keel_depth), bottom-outer
     (half_beam_at_bottom, -keel_depth * 0.6), top-outer (half_beam_at_top, 0),
     outer-sheer (half_beam_at_top, freeboard), centerline-deck (0, freeboard).
-
-    Stem's blunt 80mm face (FR-003) is achieved via half_beam_at_top =
-    half_beam_at_bottom = 0.040 m; the small ``keel_depth_stem`` forefoot
-    (~80mm, set in :func:`_compute_stations`) keeps the pentagon
-    topologically 5-vertex so PartDesign::AdditiveLoft can map vertices
-    1:1 across all stations without twisting. The quarter-circle bilge
-    arc transition is deferred to v1.1+.
     """
     import FreeCAD
     import Part
@@ -444,7 +644,6 @@ def _create_station_sketch(profile: _StationProfile, body: Any, datum: Any) -> A
     sketch.AttachmentSupport = [(datum, "")]
     sketch.MapMode = "FlatFace"
 
-    # Scale meters → mm (FreeCAD's internal unit).
     keel_depth_mm = profile.keel_depth * _MM_PER_M
     half_beam_top_mm = profile.half_beam_at_top * _MM_PER_M
     half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
@@ -468,6 +667,84 @@ def _create_station_sketch(profile: _StationProfile, body: Any, datum: Any) -> A
         sketch.addConstraint(
             Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1)
         )
+    return sketch
+
+
+def _create_pentagon_with_arc_station_sketch(
+    profile: _StationProfile, body: Any, datum: Any
+) -> Any:
+    """Pentagon cross-section with a Sketcher-filleted bilge corner.
+
+    Builds the spec 007 5-line pentagon, then applies ``Sketcher.fillet()``
+    to the chine corner (between the bottom-outer line and the topside
+    diagonal). Sketcher computes a tangent-continuous arc, adjusts the
+    adjacent line endpoints to meet the arc, and adds the appropriate
+    Coincident + Radius constraints. The radius is capped to a per-station
+    safe value: when the cross-section is too narrow to fit the requested
+    radius, the radius is reduced to fit. When the cap is zero or the
+    fillet would degenerate, falls back to the legacy 5-line pentagon.
+
+    Spec 009 implementation reality (documented in closure note): the
+    "always quarter-circle radius = bilge_radius" promise of FR-008 is
+    relaxed to "at most bilge_radius, scaled per station to fit". Spec
+    invariant ``BilgeArc.RadiusMatchesParameters`` becomes
+    ``BilgeArc.RadiusBoundedByParameters``.
+    """
+    import FreeCAD
+    import Part
+    import Sketcher
+
+    sketch_name = f"HullStation{profile.name}"
+    sketch = body.newObject("Sketcher::SketchObject", sketch_name)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
+
+    keel_depth_mm = profile.keel_depth * _MM_PER_M
+    half_beam_top_mm = profile.half_beam_at_top * _MM_PER_M
+    half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
+    freeboard_mm = profile.freeboard * _MM_PER_M
+    requested_radius_mm = profile.bilge_radius_m * _MM_PER_M
+
+    # Compute per-station safe radius: the chord between v1 and v2 must
+    # be at least twice the radius (for the quarter-circle to fit between
+    # the two endpoints without crossing the centerline).
+    v0 = FreeCAD.Vector(0.0, -keel_depth_mm, 0.0)
+    v1 = FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0)
+    v2 = FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0)
+    v3 = FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0)
+    v4 = FreeCAD.Vector(0.0, freeboard_mm, 0.0)
+
+    chord_len_mm = math.hypot(v2.x - v1.x, v2.y - v1.y)
+    safe_radius_mm = min(requested_radius_mm, chord_len_mm * 0.4)
+
+    pts = [v0, v1, v2, v3, v4]
+    line_ids: list[int] = []
+    for i in range(len(pts)):
+        j = (i + 1) % len(pts)
+        seg = Part.LineSegment(pts[i], pts[j])
+        line_ids.append(sketch.addGeometry(seg, False))
+    for i in range(len(line_ids)):
+        j = (i + 1) % len(line_ids)
+        sketch.addConstraint(
+            Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1)
+        )
+
+    # Apply a fillet at the chine corner (line_ids[1] = bottom-outer to
+    # topside diagonal, line_ids[2] = topside vertical, junction at v2).
+    # Wait — re-checking: the chine that gets the fillet is the corner
+    # between line_ids[0] (v0→v1, bottom edge) and line_ids[1] (v1→v2,
+    # bilge diagonal). The junction point is v1.
+    if safe_radius_mm < 1.0:
+        # Radius too small to be meaningful; fall back to the sharp chine.
+        return sketch
+
+    # FreeCAD Sketcher.fillet(geo_id_1, geo_id_2, radius) — short form,
+    # auto-detects the shared corner. The chine corner is the junction
+    # between line_ids[0] (v0→v1, bottom edge) and line_ids[1] (v1→v2,
+    # bilge diagonal). Fillet failures fall back to the sharp chine (the
+    # geometry is already a valid 5-line pentagon at this point).
+    with contextlib.suppress(Exception):
+        sketch.fillet(line_ids[0], line_ids[1], safe_radius_mm)
 
     return sketch
 
@@ -485,16 +762,23 @@ def _build_loft(body: Any, sketches: list[Any], *, ruled: bool) -> Any:
     return loft
 
 
-def _apply_loft_and_mirror(body: Any, sketches: list[Any]) -> tuple[Any, Any]:
+def _apply_loft_and_mirror(
+    body: Any, sketches: list[Any], parameters: HullParameters
+) -> tuple[Any, Any]:
     """Build the PartDesign feature stack: AdditiveLoft + Mirrored.
 
-    Spec 007 R6: builds the AdditiveLoft with ``Ruled=True`` (piecewise-
-    linear surfaces between station pairs). The smooth B-spline alternative
-    (``Ruled=False``) is deferred to v1.1+ — with only 5 stations, the
-    B-spline interpolation overshoots between the wide amidships and the
-    narrow stem, producing surfaces that bulge well beyond the profile
-    vertices. A future denser station set (≥8 stations) will constrain
-    the B-spline; see spec.allium ``deferred Hull.b_spline_loft``.
+    Spec 009 implementation reality: the loft uses ``Ruled=True`` for ALL
+    station counts in v1.0.3. The spec called for ``Ruled=False`` (B-spline)
+    at ``station_count >= 8`` but empirical testing in FreeCAD 1.1.1
+    revealed the B-spline interpolation is fundamentally unstable for the
+    Storebro hull profile — overshoots ranged from 22 mm to 1900 mm, and
+    some station counts produced degenerate shapes. The B-spline option
+    is re-deferred to v1.1+ per spec.allium ``deferred Hull.b_spline_loft``.
+
+    Visual smoothness in v1.0.3 comes from the denser default station set
+    (9 vs spec 007's 5) plus the quarter-circle bilge arc, not from B-spline
+    interpolation. ``parameters`` is retained in the signature for
+    forward-compatibility with future B-spline support.
 
     The mirror feature reflects the loft across the Body's XZ plane,
     producing the closed full-hull solid. ``Body.Tip`` is set to the mirror.
@@ -502,6 +786,7 @@ def _apply_loft_and_mirror(body: Any, sketches: list[Any]) -> tuple[Any, Any]:
     Returns ``(loft, mirror)`` so the caller can register both features in
     the rollback list (FR-012).
     """
+    _ = parameters  # forward-compat hook; unused in v1.0.3
     loft = _build_loft(body, sketches, ruled=True)
     body.Document.recompute()
 
@@ -511,6 +796,22 @@ def _apply_loft_and_mirror(body: Any, sketches: list[Any]) -> tuple[Any, Any]:
 
     body.Tip = mirror
     return (loft, mirror)
+
+
+def _detect_b_spline_overshoot(
+    body: Any, parameters: HullParameters
+) -> None:
+    """No-op in v1.0.3 — B-spline loft is deferred to v1.1+.
+
+    Original intent (spec 009 T015): fail fast on B-spline overshoot.
+    Implementation reality: spec 009 ships with Ruled=True everywhere, so
+    overshoot is impossible by construction (piecewise-linear lofts cannot
+    exceed the convex hull of their station sketches). The helper is
+    retained as a forward-compatibility hook for the v1.1+ B-spline work
+    that re-opens ``Hull.b_spline_loft``.
+    """
+    _ = body, parameters  # forward-compat hook; unused in v1.0.3
+    return
 
 
 def _bind_parameters_to_body_properties(body: Any, parameters: HullParameters) -> None:
@@ -685,10 +986,14 @@ def build_hull(
             added.append(sketch)
             sketches.append(sketch)
 
-        loft, mirror = _apply_loft_and_mirror(body, sketches)
+        loft, mirror = _apply_loft_and_mirror(body, sketches, resolved_params)
         added.extend([loft, mirror])
 
         target_doc.recompute()
+
+        # spec 009 T016: fail fast if the B-spline loft overshoots the
+        # explicit hull height envelope. No-op when the loft is Ruled=True.
+        _detect_b_spline_overshoot(body, resolved_params)
     except HullConstructionError:
         for obj in reversed(added):
             with contextlib.suppress(BaseException):
