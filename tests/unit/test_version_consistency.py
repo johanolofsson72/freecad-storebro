@@ -24,5 +24,5 @@ def test_dunder_matches_pyproject() -> None:
     assert storebro.__version__ == _pyproject_version()
 
 
-def test_version_is_1_0_4() -> None:
-    assert storebro.__version__ == "1.0.4"
+def test_version_is_current() -> None:
+    assert storebro.__version__ == "1.0.5"

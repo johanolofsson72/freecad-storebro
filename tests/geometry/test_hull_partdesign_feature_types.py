@@ -12,9 +12,13 @@ from typing import Any
 
 import pytest
 
-from storebro import build_hull
+from storebro import HullGlazingParameters, PortholeParameters, build_hull
 
 pytestmark = pytest.mark.requires_freecad
+
+# spec 011: glazing off, to assert the pure spec 006/009 station-feature
+# structure without the porthole datums/sketches/pockets.
+_NO_PORTHOLES = HullGlazingParameters(portholes=PortholeParameters(count_per_side=0))
 
 
 _LEGACY_TYPES = {
@@ -31,17 +35,27 @@ def test_hull_body_typeid_is_partdesign_body(freecad_doc: Any) -> None:
     assert hull.body.TypeId == "PartDesign::Body"
 
 
-def test_hull_body_tip_is_mirror_feature(freecad_doc: Any) -> None:
-    hull = build_hull(document=freecad_doc)
+def test_hull_body_tip_is_mirror_feature_without_portholes(freecad_doc: Any) -> None:
+    """With glazing off, the Body.Tip is the mirror (spec 006 FR-013)."""
+    hull = build_hull(document=freecad_doc, parameters_glazing=_NO_PORTHOLES)
     assert hull.body.Tip is not None
     assert hull.body.Tip.TypeId == "PartDesign::Mirrored"
 
 
-def test_hull_body_contains_expected_feature_types(freecad_doc: Any) -> None:
-    """Body's children: 1 Origin + N datum planes + N sketches + 1 AdditiveLoft
-    + 1 Mirrored, where N = parameters.station_count (default 9 per spec 009;
-    was 5 in spec 007)."""
+def test_hull_body_tip_is_pocket_with_default_portholes(freecad_doc: Any) -> None:
+    """spec 011: portholes are cut after the mirror, so the default Tip is a
+    PartDesign::Pocket; the mirror remains in the feature tree."""
     hull = build_hull(document=freecad_doc)
+    assert hull.body.Tip is not None
+    assert hull.body.Tip.TypeId == "PartDesign::Pocket"
+    assert any(o.TypeId == "PartDesign::Mirrored" for o in hull.body.Group)
+
+
+def test_hull_body_contains_expected_feature_types(freecad_doc: Any) -> None:
+    """Body's children (glazing off): 1 Origin + N datum planes + N sketches +
+    1 AdditiveLoft + 1 Mirrored, where N = parameters.station_count (default 9
+    per spec 009; was 5 in spec 007)."""
+    hull = build_hull(document=freecad_doc, parameters_glazing=_NO_PORTHOLES)
     type_counts = Counter(obj.TypeId for obj in hull.body.Group)
 
     # spec 009: station_count default = 9 (was 5 in spec 007).

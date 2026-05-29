@@ -1,0 +1,458 @@
+-- allium: 3
+--
+-- Spec 011 — window-cutouts
+--
+-- Adds glazing geometry: porthole recesses in the hull topsides, cabin-trunk
+-- side-window recesses, and a windshield reworked as a frame + recessed glass
+-- pane. All cuts are blind recesses into solid lofts (manifold-safe) except
+-- the windshield through-opening (thin slab). Transparency/color is OUT OF
+-- SCOPE (spec 015). Built by default; PATCH bump 1.0.4 -> 1.0.5.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+
+    default_porthole_count_per_side: Integer = 3
+    default_porthole_diameter_mm: Decimal = 220.0
+    default_porthole_recess_depth_mm: Decimal = 20.0
+
+    default_cabin_window_length_mm: Decimal = 900.0
+    default_cabin_window_height_mm: Decimal = 350.0
+    default_cabin_window_corner_radius_mm: Decimal = 80.0
+    default_cabin_window_recess_depth_mm: Decimal = 15.0
+
+    default_windshield_frame_border_mm: Decimal = 60.0
+    default_windshield_glass_thickness_mm: Decimal = 6.0
+}
+
+-- External entities — produced by earlier specs, consumed/mutated here.
+
+-- NOTE: the hull and cabin trunk are SOLID lofts (no interior cavity), so a
+-- blind recess is bounded by the local half-width, not a "wall thickness".
+external entity HullBody {
+    loa_mm: Decimal
+    waterline_z_mm: Decimal
+    half_beam_at_topside_mm: Decimal
+    freeboard_at_topside_mm: Decimal
+    solid_count: Integer
+    is_watertight: Boolean
+}
+
+external entity CabinTrunkBody {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    half_width_mm: Decimal
+    solid_count: Integer
+}
+
+external entity WindshieldSlab {
+    thickness_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+}
+
+-- Value types — parametric inputs, no identity. All lengths mm.
+
+value PortholeParameters {
+    count_per_side: Integer
+    diameter_mm: Decimal
+    recess_depth_mm: Decimal
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    height_above_waterline_mm: Decimal
+
+    invariant NonNegativeCount {
+        this.count_per_side >= 0
+    }
+
+    invariant PositiveDimensions {
+        this.diameter_mm > 0
+        this.recess_depth_mm > 0
+    }
+
+    invariant LongitudinalOrdering {
+        -- 0/0 is the "derive span from the cabin extent" sentinel; otherwise
+        -- forward must precede aft.
+        this.forward_x_mm <= this.aft_x_mm
+    }
+
+    invariant AboveWaterline {
+        this.height_above_waterline_mm > 0
+    }
+}
+
+value CabinWindowParameters {
+    count_per_side: Integer
+    length_mm: Decimal
+    height_mm: Decimal
+    corner_radius_mm: Decimal
+    recess_depth_mm: Decimal
+    sill_height_mm: Decimal
+
+    invariant NonNegativeCount {
+        this.count_per_side >= 0
+    }
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.height_mm > 0
+        this.recess_depth_mm > 0
+    }
+
+    invariant CornerRadiusBounded {
+        this.corner_radius_mm >= 0
+        this.corner_radius_mm * 2 <= this.height_mm
+        this.corner_radius_mm * 2 <= this.length_mm
+    }
+}
+
+value WindshieldGlazingParameters {
+    enabled: Boolean
+    frame_border_mm: Decimal
+    glass_thickness_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.frame_border_mm > 0
+        this.glass_thickness_mm > 0
+    }
+}
+
+value HullGlazingParameters {
+    portholes: PortholeParameters
+}
+
+value DeckGlazingParameters {
+    cabin_windows: CabinWindowParameters
+    windshield: WindshieldGlazingParameters
+}
+
+-- Output entities — produced by the cut/build operations.
+
+entity PortholeRecess {
+    parameters: PortholeParameters
+    hull: HullBody
+    longitudinal_x_mm: Decimal
+    is_port: Boolean
+    center_z_mm: Decimal
+    is_blind_recess: Boolean
+    is_partdesign_pocket: Boolean
+
+    invariant AboveWaterline {
+        this.center_z_mm > this.hull.waterline_z_mm
+    }
+
+    invariant BlindNotThrough {
+        this.is_blind_recess = true
+    }
+
+    invariant Idiomatic {
+        this.is_partdesign_pocket = true
+    }
+}
+
+entity CabinWindowRecess {
+    parameters: CabinWindowParameters
+    cabin_trunk: CabinTrunkBody
+    longitudinal_x_mm: Decimal
+    is_port: Boolean
+    is_blind_recess: Boolean
+    is_partdesign_pocket: Boolean
+
+    invariant BlindNotThrough {
+        this.is_blind_recess = true
+    }
+
+    invariant Idiomatic {
+        this.is_partdesign_pocket = true
+    }
+}
+
+entity WindshieldFrame {
+    parameters: WindshieldGlazingParameters
+    has_through_opening: Boolean
+    border_width_mm: Decimal
+    is_single_solid: Boolean
+    volume_mm3: Decimal
+
+    invariant PositiveBorder {
+        this.border_width_mm > 0
+    }
+
+    invariant ValidBody {
+        this.is_single_solid = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity WindshieldGlassPane {
+    parameters: WindshieldGlazingParameters
+    frame: WindshieldFrame
+    thickness_mm: Decimal
+    seated_in_opening: Boolean
+    is_partdesign_body: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant SeatedInFrame {
+        this.seated_in_opening = true
+    }
+}
+
+entity GlazedHull {
+    hull: HullBody
+    parameters: HullGlazingParameters
+    portholes: PortholeRecess with hull = this.hull
+    port_portholes: portholes where is_port = true
+    starboard_portholes: portholes where is_port = false
+    expected_porthole_total: parameters.portholes.count_per_side * 2
+    shape_digest: String
+
+    invariant PortholeTotalMatchesParameters {
+        this.portholes.count = this.expected_porthole_total
+    }
+
+    invariant PortholesSymmetric {
+        this.port_portholes.count = this.starboard_portholes.count
+    }
+
+    invariant HullStaysManifold {
+        this.hull.solid_count = 1
+        this.hull.is_watertight = true
+    }
+}
+
+entity GlazedDeck {
+    cabin_trunk: CabinTrunkBody
+    parameters: DeckGlazingParameters
+    windshield_frame: WindshieldFrame
+    windshield_glass: WindshieldGlassPane
+    cabin_windows: CabinWindowRecess with cabin_trunk = this.cabin_trunk
+    port_windows: cabin_windows where is_port = true
+    starboard_windows: cabin_windows where is_port = false
+    shape_digest: String
+
+    invariant WindowsSymmetric {
+        this.port_windows.count = this.starboard_windows.count
+    }
+
+    invariant CabinTrunkStaysManifold {
+        this.cabin_trunk.solid_count = 1
+    }
+}
+
+-- Rules — parameter validation + the cut/build operations.
+
+rule ValidatePortholeParameters {
+    when: GlazeHull(hull, params)
+    requires:
+        params.portholes.count_per_side >= 0
+        params.portholes.diameter_mm > 0
+        params.portholes.recess_depth_mm > 0
+        params.portholes.forward_x_mm < params.portholes.aft_x_mm
+        params.portholes.height_above_waterline_mm > 0
+}
+
+rule RejectPortholeRecessReachingFarSide {
+    -- Spec 009 lesson: a recess >= the local half-beam would punch through to
+    -- the far side of the solid hull (non-manifold risk) → reject.
+    when: GlazeHull(hull, params)
+    requires:
+        params.portholes.recess_depth_mm < hull.half_beam_at_topside_mm
+}
+
+rule RejectPortholeBelowWaterline {
+    when: GlazeHull(hull, params)
+    requires:
+        params.portholes.height_above_waterline_mm > 0
+}
+
+rule RejectPortholeLargerThanFreeboard {
+    when: GlazeHull(hull, params)
+    requires:
+        params.portholes.diameter_mm < hull.freeboard_at_topside_mm
+}
+-- (RejectPortholeLargerThanFreeboard already references the declared field.)
+
+rule GlazeHull {
+    when: GlazeHull(hull, params)
+    ensures:
+        GlazedHull.created(hull: hull, parameters: params)
+}
+
+rule CutOnePorthole {
+    when: CutOnePorthole(params, hull, x, side)
+    requires:
+        params.count_per_side > 0
+        params.recess_depth_mm < hull.half_beam_at_topside_mm
+    ensures:
+        PortholeRecess.created(
+            parameters: params,
+            hull: hull,
+            longitudinal_x_mm: x,
+            is_port: side,
+            is_blind_recess: true,
+            is_partdesign_pocket: true
+        )
+}
+
+rule SkipPortholesZeroCount {
+    when: GlazeHull(hull, params)
+    requires: params.portholes.count_per_side = 0
+    ensures: HullLeftUncut(hull)
+}
+
+rule ValidateCabinWindowParameters {
+    when: GlazeDeck(cabin_trunk, windshield, params)
+    requires:
+        params.cabin_windows.count_per_side >= 0
+        params.cabin_windows.length_mm > 0
+        params.cabin_windows.height_mm > 0
+        params.cabin_windows.recess_depth_mm > 0
+        params.cabin_windows.recess_depth_mm < cabin_trunk.half_width_mm
+}
+
+rule CutOneCabinWindow {
+    when: CutOneCabinWindow(params, cabin_trunk, x, side)
+    requires:
+        params.count_per_side > 0
+        params.recess_depth_mm < cabin_trunk.half_width_mm
+    ensures:
+        CabinWindowRecess.created(
+            parameters: params,
+            cabin_trunk: cabin_trunk,
+            longitudinal_x_mm: x,
+            is_port: side,
+            is_blind_recess: true,
+            is_partdesign_pocket: true
+        )
+}
+
+rule RejectWindshieldZeroBorder {
+    when: GlazeDeck(cabin_trunk, windshield, params)
+    requires:
+        params.windshield.enabled = false
+            or params.windshield.frame_border_mm * 2 < windshield.width_mm
+}
+
+rule BuildWindshieldFrameAndGlass {
+    when: BuildWindshieldGlazing(windshield, params)
+    requires: params.enabled = true
+    ensures:
+        WindshieldFrame.created(parameters: params, has_through_opening: true)
+        WindshieldGlassPane.created(parameters: params, seated_in_opening: true)
+}
+
+rule WindshieldGlazingDisabledFallback {
+    when: BuildWindshieldGlazing(windshield, params)
+    requires: params.enabled = false
+    ensures: WindshieldRemainsSolidSlab(windshield)
+}
+
+rule GlazeDeck {
+    when: GlazeDeck(cabin_trunk, windshield, params)
+    ensures:
+        GlazedDeck.created(cabin_trunk: cabin_trunk, parameters: params)
+}
+
+rule RollbackOnPartialFailure {
+    when: GlazingConstructionFails(target)
+    ensures: DocumentRestoredToPreCallState(target)
+}
+
+-- Global invariants — must hold across ALL instances.
+
+invariant HullManifoldAfterGlazing {
+    -- The headline regression guard (spec 009 non-manifold lesson).
+    for g in GlazedHull:
+        g.hull.solid_count = 1
+        g.hull.is_watertight = true
+}
+
+invariant CabinTrunkManifoldAfterGlazing {
+    for g in GlazedDeck:
+        g.cabin_trunk.solid_count = 1
+}
+
+invariant AllPortholesBlindRecesses {
+    for p in PortholeRecess:
+        p.is_blind_recess = true
+}
+
+invariant AllCabinWindowsBlindRecesses {
+    for w in CabinWindowRecess:
+        w.is_blind_recess = true
+}
+
+invariant AllPortholesAboveWaterline {
+    for p in PortholeRecess:
+        p.center_z_mm > p.hull.waterline_z_mm
+}
+
+invariant AllCutsArePartDesignPockets {
+    for p in PortholeRecess:
+        p.is_partdesign_pocket = true
+}
+
+invariant PortholesSymmetricPortStarboard {
+    for g in GlazedHull:
+        g.port_portholes.count = g.starboard_portholes.count
+}
+
+invariant CabinWindowsSymmetricPortStarboard {
+    for g in GlazedDeck:
+        g.port_windows.count = g.starboard_windows.count
+}
+
+invariant ReferenceFidelityWithinOnePercent {
+    for g in GlazedHull:
+        ReferenceDeviationPct(g) <= 1.0
+}
+
+invariant DeterministicShapeDigest {
+    for g1 in GlazedHull:
+        for g2 in GlazedHull:
+            g1.shape_digest = g2.shape_digest
+}
+
+-- Actors and surfaces — the library's public API. No human-facing UI; the
+-- consumer is a Python API call identified by the body it passes in.
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface HullGlazingAPI {
+    facing consumer: LibraryConsumer
+    context hull: HullBody
+    context params: HullGlazingParameters
+    provides: GlazeHull(hull, params)
+    exposes: GlazedHull
+}
+
+surface DeckGlazingAPI {
+    facing consumer: LibraryConsumer
+    context cabin_trunk: CabinTrunkBody
+    context windshield: WindshieldSlab
+    context params: DeckGlazingParameters
+    provides: GlazeDeck(cabin_trunk, windshield, params)
+    exposes: GlazedDeck
+}
+
+-- Deferred items — out of scope for the "basic glazing" of this spec.
+
+-- Implementation drift (surfaced during /tla, accepted by the user): the
+-- cabin-window cut is a plain rectangle; corner_radius is validated but not
+-- applied geometrically, because Sketcher.fillet() on the dense solid risked
+-- the spec 009 non-manifold tessellation. Rounded corners await FreeCAD
+-- verification of a fillet-free arc construction.
+deferred CabinWindowRecess.rounded_corner_geometry
+deferred PortholeRecess.glass_pane_body
+deferred CabinWindowRecess.glass_pane_body
+deferred CabinWindowRecess.mullions_and_sliding_tracks
+deferred PortholeRecess.opening_hardware_hinges_and_dogs
+deferred GlazedHull.transparency_and_materials
+deferred WindshieldGlassPane.transparency_and_materials
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md -> ## Clarifications -> Session 2026-05-29).

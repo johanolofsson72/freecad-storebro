@@ -25,8 +25,11 @@ if TYPE_CHECKING:
 __all__ = [
     "Hull",
     "HullConstructionError",
+    "HullGlazingParameters",
     "HullParameterError",
     "HullParameters",
+    "Porthole",
+    "PortholeParameters",
     "StationTopology",
     "build_hull",
 ]
@@ -866,6 +869,94 @@ def _bind_parameters_to_body_properties(body: Any, parameters: HullParameters) -
 
 
 # ---------------------------------------------------------------------------
+# Spec 011 — hull glazing (porthole) parameters + wrapper (data-model §1, §3.1)
+#
+# Portholes are blind circular PartDesign::Pocket recesses cut into the hull
+# topsides above the waterline, port + starboard, appended after the Mirror
+# feature (so they cut the full mirrored solid and become the body Tip).
+# All lengths in mm. The hull is a SOLID loft, so a recess is bounded by the
+# local half-beam, not a wall thickness.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PortholeParameters:
+    """Porthole recess parameters (data-model §1.1).
+
+    A row of ``count_per_side`` blind circular recesses per side. The
+    sentinel ``0.0`` on ``forward_x`` / ``aft_x`` / ``height_above_waterline``
+    means "derive from the actual hull geometry in :func:`build_hull`" (so
+    this dataclass needs no hull reference). All lengths in millimeters.
+
+    Example:
+        >>> p = PortholeParameters()
+        >>> p.count_per_side, p.diameter
+        (3, 220.0)
+        >>> PortholeParameters(count_per_side=0).count_per_side
+        0
+    """
+
+    count_per_side: int = 3
+    diameter: float = 220.0
+    recess_depth: float = 20.0
+    forward_x: float = 0.0
+    aft_x: float = 0.0
+    height_above_waterline: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.count_per_side < 0:
+            raise HullParameterError("porthole_count_per_side", self.count_per_side, ">= 0")
+        for name, value in (
+            ("porthole_diameter", self.diameter),
+            ("porthole_recess_depth", self.recess_depth),
+        ):
+            if value <= 0:
+                raise HullParameterError(name, value, "> 0")
+        for name, value in (
+            ("porthole_forward_x", self.forward_x),
+            ("porthole_aft_x", self.aft_x),
+            ("porthole_height_above_waterline", self.height_above_waterline),
+        ):
+            if value < 0:
+                raise HullParameterError(name, value, ">= 0")
+        # 0/0 is the "derive span" sentinel; otherwise forward must precede aft.
+        if self.forward_x != 0.0 and self.aft_x != 0.0 and self.forward_x >= self.aft_x:
+            raise HullParameterError(
+                "porthole_forward_x<>aft_x", None, "forward_x must be < aft_x"
+            )
+
+
+@dataclass(frozen=True)
+class HullGlazingParameters:
+    """Composite of the hull glazing parameter dataclasses (data-model §1.2).
+
+    The optional ``parameters_glazing`` entry point for :func:`build_hull`.
+
+    Example:
+        >>> p = HullGlazingParameters()
+        >>> p.portholes.count_per_side
+        3
+    """
+
+    portholes: PortholeParameters = field(default_factory=PortholeParameters)
+
+
+@dataclass(frozen=True)
+class Porthole:
+    """Wrapper describing the portholes cut into the hull (data-model §3.1).
+
+    ``body`` is the HullBody itself (the portholes are Pocket features on it).
+
+    Example:
+        >>> # Accessed via Hull.portholes after build_hull() returns.
+    """
+
+    body: Any
+    count: int
+    diameter: float
+
+
+# ---------------------------------------------------------------------------
 # Return aggregate (data-model §2)
 # ---------------------------------------------------------------------------
 
@@ -885,6 +976,10 @@ class Hull:
     document: Any
     label: str
     build_duration_seconds: float = field(default=0.0)
+    # spec 011 — glazing (appended with defaults; Hull is only constructed
+    # inside build_hull, so adding fields is non-breaking for callers).
+    portholes: Porthole | None = None
+    parameters_glazing: HullGlazingParameters = field(default_factory=HullGlazingParameters)
 
     @property
     def bbox(self) -> tuple[float, float, float]:
@@ -905,6 +1000,152 @@ class Hull:
 
 
 # ---------------------------------------------------------------------------
+# Spec 011 — porthole recesses (data-model §6, research R2)
+#
+# Blind circular PartDesign::Pocket recesses cut into the hull topsides above
+# the waterline, port + starboard, appended after the Mirror feature. The
+# hull is a SOLID loft, so the manifold guard is recess_depth < local
+# half-beam (the recess cannot reach the far side). A post-cut solid-count /
+# validity assertion is the spec 009 non-manifold regression guard.
+# ---------------------------------------------------------------------------
+
+_WATERLINE_Z_MM = 0.0
+"""Design waterline is the Z=0 datum (keel below, freeboard above)."""
+
+
+def _hull_outer_y_and_freeboard_at(body: Any, x_mm: float) -> tuple[float, float]:
+    """Return (sheer half-beam, freeboard) in mm at longitudinal station X.
+
+    Sourced from the actual hull shape vertices near X (not analytical), so
+    portholes seat on the real geometry. Freeboard is the max vertex Z above
+    the waterline at that station; the sheer half-beam is the max |Y|.
+    """
+    shape = body.Shape
+    near = [v for v in shape.Vertexes if abs(v.X - x_mm) < 0.05 * shape.BoundBox.XLength]
+    if not near:
+        near = list(shape.Vertexes)
+    outer_y = max((abs(v.Y) for v in near), default=shape.BoundBox.YMax)
+    freeboard = max((v.Z for v in near), default=shape.BoundBox.ZMax) - _WATERLINE_Z_MM
+    return outer_y, freeboard
+
+
+def _cut_portholes(
+    body: Any,
+    hull_params: HullParameters,
+    glazing: HullGlazingParameters,
+    added: list[Any],
+) -> Porthole:
+    """Cut the porthole recesses into the hull body (FR-001, FR-007).
+
+    Returns a :class:`Porthole` wrapper. Zero-count → no cuts (FR-011).
+    Raises :class:`HullParameterError` for a recess that would reach the far
+    side, a porthole at/below the waterline, or a diameter exceeding the local
+    freeboard (data-model §6).
+    """
+    import FreeCAD
+    import Part
+
+    pp = glazing.portholes
+    loa_mm = hull_params.loa * _MM_PER_M
+    if pp.count_per_side == 0:
+        return Porthole(body=body, count=0, diameter=pp.diameter / _MM_PER_M)
+
+    # Derive the longitudinal span (sentinel 0/0 → the accommodation region,
+    # 30%..70% of LOA) and the vertical centre (sentinel 0 → upper topside at
+    # 0.70 * local freeboard, where the topside is widest so the recess seats
+    # cleanly).
+    fwd_x = pp.forward_x if pp.forward_x > 0.0 else 0.30 * loa_mm
+    aft_x = pp.aft_x if pp.aft_x > 0.0 else 0.70 * loa_mm
+
+    if pp.count_per_side == 1:
+        x_stations = [(fwd_x + aft_x) / 2.0]
+    else:
+        step = (aft_x - fwd_x) / (pp.count_per_side - 1)
+        x_stations = [fwd_x + i * step for i in range(pp.count_per_side)]
+
+    radius = pp.diameter / 2.0
+    xz_plane = _get_origin_plane(body, "XZ_Plane")
+    seq = 0
+    for x_mm in x_stations:
+        outer_y, freeboard = _hull_outer_y_and_freeboard_at(body, x_mm)
+        # Manifold + placement guards (FR-007).
+        if pp.recess_depth >= outer_y:
+            raise HullParameterError(
+                "porthole_recess_depth<>half_beam",
+                pp.recess_depth,
+                f"< local half-beam ({outer_y:.0f} mm) so the recess stays blind",
+            )
+        if pp.diameter >= freeboard:
+            raise HullParameterError(
+                "porthole_diameter<>freeboard",
+                pp.diameter,
+                f"< local freeboard ({freeboard:.0f} mm)",
+            )
+        z_center = (
+            pp.height_above_waterline
+            if pp.height_above_waterline > 0.0
+            else _WATERLINE_Z_MM + 0.70 * freeboard
+        )
+        if z_center <= _WATERLINE_Z_MM:
+            raise HullParameterError(
+                "porthole_height_above_waterline",
+                z_center,
+                "> waterline (a porthole below the waterline is a hole in the boat)",
+            )
+        for side, sign in (("Port", 1.0), ("Starboard", -1.0)):
+            seq += 1
+            datum = body.newObject("PartDesign::Plane", f"PortholeDatum{side}{seq}")
+            added.append(datum)
+            datum.AttachmentSupport = [(xz_plane, "")]
+            datum.MapMode = "FlatFace"
+            # XZ_Plane local frame: local X = global X, local Y = global Z,
+            # local Z = global Y (normal). Place datum just outboard of the
+            # sheer at this station: global (x, sign*(outer_y+2), z=0) →
+            # local (x, 0, sign*(outer_y+2)).
+            datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(x_mm, 0.0, sign * (outer_y + 2.0)),
+                FreeCAD.Rotation(),
+            )
+            sketch = body.newObject("Sketcher::SketchObject", f"PortholeSketch{side}{seq}")
+            added.append(sketch)
+            sketch.AttachmentSupport = [(datum, "")]
+            sketch.MapMode = "FlatFace"
+            # Sketch local x = global X, local y = global Z.
+            circle = Part.Circle(
+                FreeCAD.Vector(x_mm, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
+            )
+            sketch.addGeometry(circle.toShape().Curve, False)
+            pocket = body.newObject("PartDesign::Pocket", f"PortholePocket{side}{seq}")
+            added.append(pocket)
+            pocket.Profile = (sketch, [""])
+            pocket.Length = pp.recess_depth + 2.0  # +2 to bridge the datum offset
+            pocket.Reversed = sign > 0.0  # cut toward the centerline
+            pocket.Midplane = False
+
+    return Porthole(
+        body=body,
+        count=pp.count_per_side * 2,
+        diameter=pp.diameter / _MM_PER_M,
+    )
+
+
+def _assert_hull_manifold(body: Any, parameters: HullParameters) -> None:
+    """FR-008: after cuts, the hull must remain a single closed solid.
+
+    The spec 009 non-manifold regression guard. Blind recesses should never
+    trip this; a trip means a genuine bug, so fail loudly (rollback).
+    """
+    shape = body.Shape
+    solids = shape.Solids
+    if len(solids) != 1 or not shape.isValid():
+        raise HullConstructionError(
+            f"hull is non-manifold after glazing cuts "
+            f"(solids={len(solids)}, valid={shape.isValid()})",
+            parameters=parameters,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Public builder (FR-001 + contracts/python-api.md)
 # ---------------------------------------------------------------------------
 
@@ -912,6 +1153,7 @@ class Hull:
 def build_hull(
     parameters: HullParameters | None = None,
     *,
+    parameters_glazing: HullGlazingParameters | None = None,
     document: Any = None,
     name: str = "Hull",
 ) -> Hull:
@@ -960,6 +1202,9 @@ def build_hull(
     resolved_params = parameters if parameters is not None else HullParameters()
     _validate_hull_parameters(resolved_params)
 
+    # spec 011 — resolve glazing (portholes on by default).
+    glazing = parameters_glazing if parameters_glazing is not None else HullGlazingParameters()
+
     # Resolve document (FR-016).
     target_doc = _resolve_document(document)
     body_label = _resolve_body_label(name)
@@ -994,6 +1239,12 @@ def build_hull(
         # spec 009 T016: fail fast if the B-spline loft overshoots the
         # explicit hull height envelope. No-op when the loft is Ruled=True.
         _detect_b_spline_overshoot(body, resolved_params)
+
+        # spec 011 — cut porthole recesses after the mirror, then assert the
+        # hull is still a single closed solid (FR-008 non-manifold guard).
+        portholes = _cut_portholes(body, resolved_params, glazing, added)
+        target_doc.recompute()
+        _assert_hull_manifold(body, resolved_params)
     except HullConstructionError:
         for obj in reversed(added):
             with contextlib.suppress(BaseException):
@@ -1017,4 +1268,6 @@ def build_hull(
         document=target_doc,
         label=body.Label,
         build_duration_seconds=duration,
+        portholes=portholes,
+        parameters_glazing=glazing,
     )

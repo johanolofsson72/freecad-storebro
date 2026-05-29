@@ -48,11 +48,7 @@ def test_hardtop_is_partdesign_body(freecad_doc: object) -> None:
 def test_every_pillar_is_partdesign_body(freecad_doc: object) -> None:
     hull = build_hull(document=freecad_doc)
     deck = build_deck(hull)
-    pillar_bodies = [
-        obj
-        for obj in deck.document.Objects
-        if obj.Label.startswith("Deck_Pillar_")
-    ]
+    pillar_bodies = [obj for obj in deck.document.Objects if obj.Label.startswith("Deck_Pillar_")]
     assert len(pillar_bodies) >= 2, "FR-014: at least one pillar body must exist on default params"
     for body in pillar_bodies:
         assert body.TypeId == "PartDesign::Body", (
@@ -127,7 +123,9 @@ def test_each_partdesign_body_has_loft_or_pad_tip(freecad_doc: object) -> None:
     for body in bodies:
         assert body.Tip is not None, f"{body.Label}: no Tip feature"
         tip_type = body.Tip.TypeId
+        # spec 011: cabin trunk + windshield now end in a PartDesign::Pocket
+        # (side-window recesses / windshield frame opening), a valid feature.
         assert any(
             keyword in tip_type
-            for keyword in ("AdditiveLoft", "AdditivePipe", "Pad", "Mirrored")
+            for keyword in ("AdditiveLoft", "AdditivePipe", "Pad", "Mirrored", "Pocket")
         ), f"{body.Label}: Tip is {tip_type}, not a recognized PartDesign feature"

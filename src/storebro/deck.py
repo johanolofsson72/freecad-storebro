@@ -46,9 +46,11 @@ __all__ = [
     "AnchorLockerParameters",
     "BowPulpitParameters",
     "CabinTrunkParameters",
+    "CabinWindowParameters",
     "CleatParameters",
     "Deck",
     "DeckConstructionError",
+    "DeckGlazingParameters",
     "DeckHardwareParameters",
     "DeckParameterError",
     "DeckParameters",
@@ -58,6 +60,7 @@ __all__ = [
     "PillarParameters",
     "RailingParameters",
     "RubrailParameters",
+    "WindshieldGlazingParameters",
     "WindshieldParameters",
     "build_deck",
 ]
@@ -892,6 +895,106 @@ class DeckHardwareParameters:
 
 
 # ---------------------------------------------------------------------------
+# Spec 011 — deck glazing parameters (data-model §2)
+#
+# Cabin-trunk side-window recesses (blind PartDesign::Pocket into the solid
+# trunk) + the windshield frame/glass rework. All lengths in mm; validation
+# raises DeckParameterError.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CabinWindowParameters:
+    """Cabin-trunk side-window recess parameters (data-model §2.1).
+
+    Blind rounded-rectangle recesses cut into each cabin-trunk side wall.
+    Sentinel ``0.0`` on ``sill_height`` means "centre vertically on the wall".
+
+    Example:
+        >>> p = CabinWindowParameters()
+        >>> p.count_per_side, p.length, p.height
+        (1, 900.0, 350.0)
+    """
+
+    count_per_side: int = 1
+    length: float = 900.0
+    height: float = 350.0
+    corner_radius: float = 80.0
+    recess_depth: float = 15.0
+    sill_height: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.count_per_side < 0:
+            raise DeckParameterError(
+                "cabin_window_count_per_side", self.count_per_side, ">= 0"
+            )
+        for name, value in (
+            ("cabin_window_length", self.length),
+            ("cabin_window_height", self.height),
+            ("cabin_window_recess_depth", self.recess_depth),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        if self.corner_radius < 0:
+            raise DeckParameterError(
+                "cabin_window_corner_radius", self.corner_radius, ">= 0"
+            )
+        if self.corner_radius * 2 > self.height or self.corner_radius * 2 > self.length:
+            raise DeckParameterError(
+                "cabin_window_corner_radius",
+                self.corner_radius,
+                "2*corner_radius must be <= both length and height",
+            )
+        if self.sill_height < 0:
+            raise DeckParameterError("cabin_window_sill_height", self.sill_height, ">= 0")
+
+
+@dataclass(frozen=True)
+class WindshieldGlazingParameters:
+    """Windshield frame + glass parameters (data-model §2.2).
+
+    When ``enabled`` the windshield slab gets a central through-opening
+    (leaving ``frame_border`` on all sides) plus a separate glass pane.
+    When disabled, the spec 008 solid slab is kept (FR-011).
+
+    Example:
+        >>> p = WindshieldGlazingParameters()
+        >>> p.enabled, p.frame_border, p.glass_thickness
+        (True, 60.0, 6.0)
+    """
+
+    enabled: bool = True
+    frame_border: float = 60.0
+    glass_thickness: float = 6.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("windshield_frame_border", self.frame_border),
+            ("windshield_glass_thickness", self.glass_thickness),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+
+
+@dataclass(frozen=True)
+class DeckGlazingParameters:
+    """Composite of the deck glazing parameter dataclasses (data-model §2.3).
+
+    The optional ``parameters_glazing`` entry point for :func:`build_deck`.
+
+    Example:
+        >>> p = DeckGlazingParameters()
+        >>> p.cabin_windows.count_per_side, p.windshield.enabled
+        (1, True)
+    """
+
+    cabin_windows: CabinWindowParameters = field(default_factory=CabinWindowParameters)
+    windshield: WindshieldGlazingParameters = field(
+        default_factory=WindshieldGlazingParameters
+    )
+
+
+# ---------------------------------------------------------------------------
 # Sub-Body wrappers (data-model §2)
 # ---------------------------------------------------------------------------
 
@@ -924,8 +1027,27 @@ class CabinTrunk:
 
 
 @dataclass(frozen=True)
+class WindshieldGlass:
+    """Wrapper around the windshield glass-pane PartDesign::Body (spec 011).
+
+    Its transparency/material is assigned later by spec 015.
+
+    Example:
+        >>> # Accessed via Deck.windshield.glass_pane.
+    """
+
+    body: Any
+    thickness: float
+
+
+@dataclass(frozen=True)
 class Windshield:
     """Wrapper around the FreeCAD Body representing the windshield.
+
+    Spec 011: when glazing is enabled the ``body`` is the frame (slab with a
+    central through-opening) and ``glass_pane`` carries the recessed pane;
+    when disabled ``body`` is the spec 008 solid slab and ``glass_pane`` is
+    ``None``.
 
     Example:
         >>> # Accessed via Deck.windshield.
@@ -933,6 +1055,7 @@ class Windshield:
 
     body: Any
     rake_degrees: float
+    glass_pane: WindshieldGlass | None = None
 
 
 @dataclass(frozen=True)
@@ -1045,6 +1168,20 @@ class Cleats:
     count: int
 
 
+@dataclass(frozen=True)
+class CabinWindows:
+    """Wrapper describing the side windows cut into the cabin trunk (spec 011).
+
+    ``body`` is the cabin-trunk body (the windows are Pocket features on it).
+
+    Example:
+        >>> # Accessed via Deck.cabin_windows.
+    """
+
+    body: Any
+    count: int
+
+
 # ---------------------------------------------------------------------------
 # Return aggregate (data-model §3)
 # ---------------------------------------------------------------------------
@@ -1080,6 +1217,9 @@ class Deck:
     anchor_locker: AnchorLocker
     cleats: Cleats
     parameters_hardware: DeckHardwareParameters
+    # spec 011 — glazing (appended; Deck is only constructed inside build_deck).
+    cabin_windows: CabinWindows
+    parameters_glazing: DeckGlazingParameters
 
 
 # ---------------------------------------------------------------------------
@@ -1358,6 +1498,44 @@ def _pd_close_loop_constraints(sketch: Any, line_ids: list[int]) -> None:
         sketch.addConstraint(Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1))
 
 
+def _slab_sketch_rect(
+    body: Any,
+    datum: Any,
+    name: str,
+    half_w_mm: float,
+    half_h_mm: float,
+    vertical_center_mm: float,
+    added: list[Any],
+) -> Any:
+    """Centered rectangle sketch on a YZ-parallel datum (spec 011 helper).
+
+    Sketch local x = global Y, local y = global Z (datum normal = global X).
+    The rectangle is centered at (0, ``vertical_center_mm``) with the given
+    half-width (Y) and half-height (Z). Used for the windshield frame opening
+    and the glass pane.
+    """
+    import FreeCAD
+    import Part
+
+    sketch = body.newObject("Sketcher::SketchObject", name)
+    added.append(sketch)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
+    cz = vertical_center_mm
+    pts = [
+        FreeCAD.Vector(-half_w_mm, cz - half_h_mm, 0),
+        FreeCAD.Vector(half_w_mm, cz - half_h_mm, 0),
+        FreeCAD.Vector(half_w_mm, cz + half_h_mm, 0),
+        FreeCAD.Vector(-half_w_mm, cz + half_h_mm, 0),
+    ]
+    line_ids: list[int] = []
+    for i in range(4):
+        j = (i + 1) % 4
+        line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+    _pd_close_loop_constraints(sketch, line_ids)
+    return sketch
+
+
 def _build_cabin_trunk(
     hull: Hull,
     parameters: DeckParameters,
@@ -1465,6 +1643,7 @@ def _build_windshield(
     added: list[Any],
     *,
     superstructure: DeckSuperstructureParameters | None = None,
+    glazing: DeckGlazingParameters | None = None,
 ) -> Windshield:
     """Build windshield as PartDesign::Body with AdditiveLoft (spec 008 FR-005..008).
 
@@ -1575,7 +1754,176 @@ def _build_windshield(
     )
     body.WindshieldRake = ws.rake_angle_base
 
-    return Windshield(body=body, rake_degrees=ws.rake_angle_base)
+    # Spec 011 — frame + glass rework. When enabled, pocket a central opening
+    # ThroughAll along X (a projection cut through the raked panel) leaving
+    # `frame_border` on all sides, then build a separate thin glass pane that
+    # fills the opening. When disabled, keep the spec 008 solid slab (FR-011).
+    wg = (glazing or DeckGlazingParameters()).windshield
+    glass_pane: WindshieldGlass | None = None
+    if wg.enabled:
+        opening_half_w = ws.base_width / 2.0 - wg.frame_border
+        opening_half_h = (top_z_mm - base_z_mm) / 2.0 - wg.frame_border
+        if opening_half_w <= 0 or opening_half_h <= 0:
+            raise DeckParameterError(
+                "windshield_frame_border<>opening",
+                wg.frame_border,
+                "2*frame_border must be < windshield width and height (a "
+                "positive opening must remain)",
+            )
+        # Frame opening: rectangle on the base YZ datum (normal = global X),
+        # centered at (Y=0, Z=mid_z), ThroughAll along X.
+        opening_sketch = _slab_sketch_rect(
+            body, base_datum, "WindshieldOpeningSketch", opening_half_w, opening_half_h, mid_z_mm, added
+        )
+        pocket = body.newObject("PartDesign::Pocket", "WindshieldFrameOpening")
+        added.append(pocket)
+        pocket.Profile = (opening_sketch, [""])
+        pocket.Type = "ThroughAll"
+        pocket.Midplane = True
+        target_doc.recompute()
+
+        # Glass pane: a separate thin body filling the opening, X-thin.
+        glass_body = target_doc.addObject("PartDesign::Body", "Deck_WindshieldGlass")
+        added.append(glass_body)
+        target_doc.recompute()
+        gp_yz = _pd_get_origin_plane(glass_body, "YZ_Plane")
+        gp_datum = glass_body.newObject("PartDesign::Plane", "WindshieldGlassDatum")
+        added.append(gp_datum)
+        gp_datum.AttachmentSupport = [(gp_yz, "")]
+        gp_datum.MapMode = "FlatFace"
+        gp_datum.AttachmentOffset = FreeCAD.Placement(
+            FreeCAD.Vector(0.0, 0.0, mid_x_mm), FreeCAD.Rotation()
+        )
+        gp_sketch = _slab_sketch_rect(
+            glass_body, gp_datum, "WindshieldGlassSketch", opening_half_w, opening_half_h, mid_z_mm, added
+        )
+        gp_pad = glass_body.newObject("PartDesign::Pad", "WindshieldGlassPad")
+        added.append(gp_pad)
+        gp_pad.Profile = (gp_sketch, [""])
+        gp_pad.Length = wg.glass_thickness
+        gp_pad.Midplane = True
+        target_doc.recompute()
+        glass_pane = WindshieldGlass(
+            body=glass_body, thickness=wg.glass_thickness / _MM_PER_M
+        )
+
+    return Windshield(
+        body=body, rake_degrees=ws.rake_angle_base, glass_pane=glass_pane
+    )
+
+
+def _cut_cabin_windows(
+    cabin_trunk: CabinTrunk,
+    glazing: DeckGlazingParameters,
+    target_doc: Any,
+    added: list[Any],
+) -> CabinWindows:
+    """Cut blind side-window recesses into the cabin trunk (spec 011 FR-002).
+
+    Per side, a rectangular `PartDesign::Pocket` of depth ``recess_depth`` into
+    the trunk side wall, on an XZ-parallel datum (normal = global Y) at the
+    trunk side outer-Y. Plain rectangle: the rounded corners are deferred
+    (Sketcher fillet fragility, spec 009 lesson). Zero-count → no cuts.
+
+    Raises :class:`DeckParameterError` if the recess would reach the far side
+    of the solid trunk or the opening would not fit the wall.
+    """
+    import FreeCAD
+    import Part
+
+    cw = glazing.cabin_windows
+    body = cabin_trunk.body
+    if cw.count_per_side == 0:
+        return CabinWindows(body=body, count=0)
+
+    bb = body.Shape.BoundBox
+    half_width = bb.YLength / 2.0
+    if cw.recess_depth >= half_width:
+        raise DeckParameterError(
+            "cabin_window_recess_depth<>wall",
+            cw.recess_depth,
+            f"< trunk half-width ({half_width:.0f} mm) so the recess stays blind",
+        )
+    length_avail = bb.XLength
+    height_avail = bb.ZLength
+    if cw.length >= length_avail or cw.height >= height_avail:
+        raise DeckParameterError(
+            "cabin_window_opening<>wall",
+            None,
+            f"window {cw.length:.0f}x{cw.height:.0f} mm must fit within the "
+            f"trunk wall ({length_avail:.0f}x{height_avail:.0f} mm)",
+        )
+
+    # Longitudinal stations for the windows, inset 12% from each end.
+    lo, hi = bb.XMin + 0.12 * length_avail, bb.XMax - 0.12 * length_avail
+    if cw.count_per_side == 1:
+        x_stations = [(lo + hi) / 2.0]
+    else:
+        step = (hi - lo) / (cw.count_per_side - 1)
+        x_stations = [lo + i * step for i in range(cw.count_per_side)]
+    cz = (
+        bb.ZMin + cw.sill_height + cw.height / 2.0
+        if cw.sill_height > 0.0
+        else (bb.ZMin + bb.ZMax) / 2.0
+    )
+    outer_y = bb.YMax
+    half_l = cw.length / 2.0
+    half_h = cw.height / 2.0
+
+    xz_plane = _pd_get_origin_plane(body, "XZ_Plane")
+    count = 0
+    for x_mm in x_stations:
+        for side, sign in (("Port", 1.0), ("Starboard", -1.0)):
+            count += 1
+            datum = body.newObject("PartDesign::Plane", f"CabinWindowDatum{side}{count}")
+            added.append(datum)
+            datum.AttachmentSupport = [(xz_plane, "")]
+            datum.MapMode = "FlatFace"
+            # XZ_Plane: local X = global X, local Y = global Z, local Z = global Y.
+            datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(x_mm, cz, sign * (outer_y + 2.0)),
+                FreeCAD.Rotation(),
+            )
+            sketch = body.newObject(
+                "Sketcher::SketchObject", f"CabinWindowSketch{side}{count}"
+            )
+            added.append(sketch)
+            sketch.AttachmentSupport = [(datum, "")]
+            sketch.MapMode = "FlatFace"
+            # Sketch local x = global X, local y = global Z; centered at datum origin.
+            pts = [
+                FreeCAD.Vector(-half_l, -half_h, 0),
+                FreeCAD.Vector(half_l, -half_h, 0),
+                FreeCAD.Vector(half_l, half_h, 0),
+                FreeCAD.Vector(-half_l, half_h, 0),
+            ]
+            line_ids: list[int] = []
+            for i in range(4):
+                j = (i + 1) % 4
+                line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+            _pd_close_loop_constraints(sketch, line_ids)
+            pocket = body.newObject("PartDesign::Pocket", f"CabinWindowPocket{side}{count}")
+            added.append(pocket)
+            pocket.Profile = (sketch, [""])
+            pocket.Length = cw.recess_depth + 2.0
+            pocket.Reversed = sign > 0.0  # cut toward the centerline
+            pocket.Midplane = False
+
+    return CabinWindows(body=body, count=count)
+
+
+def _assert_solid_manifold(body: Any, label: str) -> None:
+    """Spec 011 FR-008: a cut body must remain a single closed solid.
+
+    Raises :class:`DeckConstructionError` on a non-manifold result (the spec
+    009 regression guard).
+    """
+    shape = body.Shape
+    if len(shape.Solids) != 1 or not shape.isValid():
+        raise DeckConstructionError(
+            f"{label} is non-manifold after glazing cuts "
+            f"(solids={len(shape.Solids)}, valid={shape.isValid()})"
+        )
 
 
 def _build_hardtop(
@@ -2531,6 +2879,7 @@ def build_deck(
     *,
     parameters_superstructure: DeckSuperstructureParameters | None = None,
     parameters_hardware: DeckHardwareParameters | None = None,
+    parameters_glazing: DeckGlazingParameters | None = None,
     document: Any = None,
     name: str = "Deck",
 ) -> Deck:
@@ -2605,6 +2954,8 @@ def build_deck(
 
     # Resolve the spec 010 hardware composite (defaults → hardware on by default).
     hw = parameters_hardware if parameters_hardware is not None else DeckHardwareParameters()
+    # spec 011 — resolve glazing (cabin windows + framed windshield, on by default).
+    glz = parameters_glazing if parameters_glazing is not None else DeckGlazingParameters()
 
     target_doc = _resolve_document(hull, document)
     label = name if name is not None else "Deck"
@@ -2617,7 +2968,7 @@ def build_deck(
             hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
         )
         windshield = _build_windshield(
-            hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp
+            hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp, glazing=glz
         )
         hardtop = _build_hardtop(
             hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp
@@ -2648,6 +2999,14 @@ def build_deck(
         )
         cleats = _build_cleats(hull, deck_plate, target_doc, added, hardware=hw)
         lifelines = _build_lifelines(deck_plate, target_doc, added, hardware=hw, superstructure=sp)
+
+        # Spec 011 — cabin-trunk side windows (cut last, after every consumer
+        # of the trunk geometry has read it), then the manifold guards (FR-008).
+        cabin_windows = _cut_cabin_windows(cabin_trunk, glz, target_doc, added)
+        target_doc.recompute()
+        _assert_solid_manifold(cabin_trunk.body, "cabin trunk")
+        if glz.windshield.enabled:
+            _assert_solid_manifold(windshield.body, "windshield frame")
         target_doc.recompute()
     except DeckParameterError:
         _rollback(target_doc, added)
@@ -2683,4 +3042,6 @@ def build_deck(
         anchor_locker=anchor_locker,
         cleats=cleats,
         parameters_hardware=hw,
+        cabin_windows=cabin_windows,
+        parameters_glazing=glz,
     )
