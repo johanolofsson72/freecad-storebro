@@ -185,7 +185,7 @@ Read these files WHEN you need them — do not load everything upfront:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/012-interior-detail-alternativ1-2/plan.md`.
+at `specs/013-interior-detail-alternativ3-5/plan.md`.
 <!-- SPECKIT END -->
 
 ## graphify

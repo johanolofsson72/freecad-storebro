@@ -851,7 +851,11 @@ def _build_compartment(
 # ---------------------------------------------------------------------------
 
 _MM_TO_UNIT = 1.0 / 1000.0
-_FURNISHED_LAYOUTS: frozenset[str] = frozenset({"Alternativ1", "Alternativ2"})
+# spec 013: furniture now applies to all five canonical layouts (spec 012
+# enabled Alt1/Alt2). Reuse _CANONICAL_LAYOUT_NAMES so the two cannot drift.
+# Custom (non-canonical) YAML layouts keep boxy placeholders. The per-type
+# dispatch skips absent compartment types (Alternativ5 has no galley).
+_FURNISHED_LAYOUTS: frozenset[str] = _CANONICAL_LAYOUT_NAMES
 
 
 def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[float, float, float]) -> Any:

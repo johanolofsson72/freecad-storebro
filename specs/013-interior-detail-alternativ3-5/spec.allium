@@ -1,0 +1,113 @@
+-- allium: 3
+--
+-- Spec 013 — interior-detail-alternativ3-5
+--
+-- Extends the spec 012 type-keyed furniture builders to Alternativ3/4/5 by
+-- widening the furnished-layout gate from {Alt1, Alt2} to all five canonical
+-- names. No new furniture entities — this spec captures only the DELTA: the
+-- widened gate, per-type-presence dispatch (Alt5 has no galley), and the
+-- custom-layout-stays-boxy rule. Furniture model = spec 012. PATCH 1.0.6->1.0.7.
+
+config {
+    canonical_layout_count: Integer = 5
+}
+
+-- External entities — the spec 012 furniture model + the interior module.
+
+external entity Compartment {
+    name: String
+    compartment_type: forward_cabin | galley | head | salon
+}
+
+external entity Layout {
+    layout_name: String
+    is_canonical: Boolean
+    has_galley_compartment: Boolean
+}
+
+-- Output entity — the furnished/boxy decision per layout.
+
+entity InteriorBuild {
+    layout: Layout
+    is_furnished: Boolean
+    galley_furniture_built: Boolean
+
+    invariant FurnishedIffCanonical {
+        this.is_furnished = this.layout.is_canonical
+    }
+
+    invariant GalleyOnlyWhenPresent {
+        this.galley_furniture_built
+            implies (this.is_furnished and this.layout.has_galley_compartment)
+    }
+}
+
+-- Rules — the gate + dispatch behavior added by this spec.
+
+rule FurnishCanonicalLayout {
+    -- All five canonical layouts are furnished by the spec 012 builders.
+    when: BuildInterior(layout)
+    requires: layout.is_canonical = true
+    ensures:
+        InteriorBuild.created(layout: layout, is_furnished: true)
+}
+
+rule LeaveCustomLayoutBoxy {
+    -- Non-canonical (custom YAML) layouts keep boxy placeholders.
+    when: BuildInterior(layout)
+    requires: layout.is_canonical = false
+    ensures:
+        InteriorBuild.created(layout: layout, is_furnished: false)
+}
+
+rule BuildFurnitureForPresentTypesOnly {
+    -- Per-compartment dispatch: a layout missing a type (Alt5 has no galley)
+    -- builds the remaining furniture without error.
+    when: FurnishCompartment(compartment, layout)
+    requires: layout.is_canonical = true
+    ensures: FurnitureBuiltForType(compartment.compartment_type)
+}
+
+rule SkipGalleyWhenAbsent {
+    when: BuildInterior(layout)
+    requires:
+        layout.is_canonical = true
+        layout.has_galley_compartment = false
+    ensures: NoGalleyFurnitureBuilt(layout)
+}
+
+-- Global invariants.
+
+invariant AllCanonicalLayoutsFurnished {
+    for b in InteriorBuild where layout.is_canonical = true:
+        b.is_furnished = true
+}
+
+invariant CustomLayoutsStayBoxy {
+    for b in InteriorBuild where layout.is_canonical = false:
+        b.is_furnished = false
+}
+
+invariant GalleyFurnitureRequiresGalleyCompartment {
+    for b in InteriorBuild where galley_furniture_built = true:
+        b.layout.has_galley_compartment = true
+}
+
+-- Actors and surfaces.
+
+actor LibraryConsumer { identified_by: Layout }
+
+surface InteriorBuildAPI {
+    facing consumer: LibraryConsumer
+    context layout: Layout
+    provides: BuildInterior(layout)
+    exposes: InteriorBuild
+}
+
+-- Deferred items.
+
+deferred InteriorBuild.custom_layout_furniture_mode
+deferred InteriorBuild.alt5_integrated_galley_in_salon
+deferred InteriorBuild.interior_to_hull_scale_fix
+
+-- No open questions remain — resolved via /clarify (spec.md -> Clarifications).

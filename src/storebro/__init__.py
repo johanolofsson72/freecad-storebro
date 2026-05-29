@@ -68,7 +68,7 @@ from storebro.interior import (
     build_interior,
 )
 
-__version__ = "1.0.6"
+__version__ = "1.0.7"
 
 __all__ = [
     "AnchorLockerParameters",
