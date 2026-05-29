@@ -1245,6 +1245,15 @@ def build_hull(
         portholes = _cut_portholes(body, resolved_params, glazing, added)
         target_doc.recompute()
         _assert_hull_manifold(body, resolved_params)
+    except HullParameterError:
+        # spec 011: porthole cross-geometry validation (recess vs half-beam,
+        # above-waterline, diameter vs freeboard) runs inside the try because
+        # it needs the built hull; let it propagate as a parameter error
+        # rather than being re-wrapped as a construction failure.
+        for obj in reversed(added):
+            with contextlib.suppress(BaseException):
+                target_doc.removeObject(obj.Name)
+        raise
     except HullConstructionError:
         for obj in reversed(added):
             with contextlib.suppress(BaseException):

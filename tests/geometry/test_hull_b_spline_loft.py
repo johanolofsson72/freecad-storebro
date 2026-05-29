@@ -18,15 +18,21 @@ import pytest
 from storebro.hull import (
     DEFAULT_STATION_COUNT,
     HULL_BUILD_TIME_BUDGET_SECONDS,
+    HullGlazingParameters,
     HullParameters,
+    PortholeParameters,
     build_hull,
 )
 
 pytestmark = pytest.mark.requires_freecad
 
+# spec 011: glazing off, to count only the station sketches and see the mirror
+# as Tip (default portholes add 6 sketches and make the Tip a Pocket).
+_NO_PORTHOLES = HullGlazingParameters(portholes=PortholeParameters(count_per_side=0))
+
 
 def test_default_hull_has_station_count_sketches() -> None:
-    hull = build_hull()
+    hull = build_hull(parameters_glazing=_NO_PORTHOLES)
     sketches = [
         obj
         for obj in hull.body.Group
@@ -54,7 +60,9 @@ def test_default_hull_shape_is_closed_and_has_positive_volume() -> None:
 
 
 def test_default_hull_tip_is_mirrored_feature() -> None:
-    hull = build_hull()
+    # With glazing off the Tip is the mirror; default portholes append Pockets
+    # after it (covered by tests/geometry/test_hull_partdesign_feature_types.py).
+    hull = build_hull(parameters_glazing=_NO_PORTHOLES)
     assert hull.body.Tip.TypeId == "PartDesign::Mirrored"
 
 
@@ -71,7 +79,7 @@ def test_legacy_station_count_uses_ruled_true_loft() -> None:
 
 
 def test_legacy_station_count_has_five_sketches() -> None:
-    hull = build_hull(HullParameters(station_count=5))
+    hull = build_hull(HullParameters(station_count=5), parameters_glazing=_NO_PORTHOLES)
     sketches = [
         obj
         for obj in hull.body.Group

@@ -17,7 +17,7 @@ from storebro import build_hull, export_stl
 def test_glazed_hull_stl_is_watertight(freecad_doc: object, tmp_path: Path) -> None:
     hull = build_hull(document=freecad_doc)
     out = tmp_path / "glazed_hull.stl"
-    artifact = export_stl(hull.document, str(out))
+    artifact = export_stl(hull.body, str(out))
     assert out.is_file()
     assert artifact.byte_count > 0
     # The exported solid is a single closed manifold (the cuts are blind).
