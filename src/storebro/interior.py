@@ -33,9 +33,15 @@ from storebro.deck import Deck
 from storebro.hull import Hull
 
 __all__ = [
+    "BerthParameters",
+    "BulkheadParameters",
+    "FurnitureParameters",
+    "GalleyParameters",
+    "HeadParameters",
     "Interior",
     "InteriorConstructionError",
     "InteriorParameterError",
+    "SalonParameters",
     "build_interior",
 ]
 
@@ -217,6 +223,167 @@ class LayoutSpec:
 
 
 # ---------------------------------------------------------------------------
+# Spec 012 — furniture parameter dataclasses (data-model §1)
+#
+# Type-keyed furniture for Alt1/Alt2 compartments. All lengths in mm.
+# Validation raises InteriorParameterError (source="FurnitureParameters").
+# Furniture is built as Part::Feature B-rep solids (matching the module's
+# spec 004 idiom); the galley counter uses a boolean Part.Cut for recesses.
+# ---------------------------------------------------------------------------
+
+
+def _furniture_error(field_name: str, reason: str) -> InteriorParameterError:
+    """Build an InteriorParameterError for a furniture-parameter violation."""
+    return InteriorParameterError("FurnitureParameters", None, field_name, reason)
+
+
+@dataclass(frozen=True)
+class BerthParameters:
+    """Forward-cabin berth (base + cushions) parameters (data-model §1.1).
+
+    Example:
+        >>> p = BerthParameters()
+        >>> p.base_height, p.cushion_count
+        (350.0, 1)
+    """
+
+    base_height: float = 350.0
+    cushion_thickness: float = 100.0
+    cushion_count: int = 1
+    wall_inset: float = 50.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("berth_base_height", self.base_height),
+            ("berth_cushion_thickness", self.cushion_thickness),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+        if self.cushion_count < 0:
+            raise _furniture_error("berth_cushion_count", "must be >= 0")
+        if self.wall_inset < 0:
+            raise _furniture_error("berth_wall_inset", "must be >= 0")
+
+
+@dataclass(frozen=True)
+class GalleyParameters:
+    """Galley counter + sink/stove recess parameters (data-model §1.2).
+
+    Recess depths must stay below the counter thickness so the boolean cut
+    is a blind recess (manifold by construction; spec 009/011 lesson).
+
+    Example:
+        >>> p = GalleyParameters()
+        >>> p.counter_height, p.cutouts_enabled
+        (900.0, True)
+    """
+
+    counter_height: float = 900.0
+    counter_thickness: float = 40.0
+    sink_recess_depth: float = 30.0
+    stove_recess_depth: float = 20.0
+    cutouts_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("galley_counter_height", self.counter_height),
+            ("galley_counter_thickness", self.counter_thickness),
+            ("galley_sink_recess_depth", self.sink_recess_depth),
+            ("galley_stove_recess_depth", self.stove_recess_depth),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+        for name, value in (
+            ("galley_sink_recess_depth", self.sink_recess_depth),
+            ("galley_stove_recess_depth", self.stove_recess_depth),
+        ):
+            if value >= self.counter_thickness:
+                raise _furniture_error(
+                    name, "must be < counter_thickness (blind recess, not through)"
+                )
+
+
+@dataclass(frozen=True)
+class HeadParameters:
+    """Head toilet + sink parameters (data-model §1.3).
+
+    Example:
+        >>> p = HeadParameters()
+        >>> p.toilet_height, p.sink_height
+        (400.0, 800.0)
+    """
+
+    toilet_height: float = 400.0
+    sink_height: float = 800.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("head_toilet_height", self.toilet_height),
+            ("head_sink_height", self.sink_height),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+
+
+@dataclass(frozen=True)
+class SalonParameters:
+    """Salon seating + table parameters (data-model §1.4).
+
+    Example:
+        >>> p = SalonParameters()
+        >>> p.seat_height, p.table_height
+        (400.0, 650.0)
+    """
+
+    seat_height: float = 400.0
+    table_height: float = 650.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("salon_seat_height", self.seat_height),
+            ("salon_table_height", self.table_height),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+
+
+@dataclass(frozen=True)
+class BulkheadParameters:
+    """Bulkhead partition parameters (data-model §1.5).
+
+    Example:
+        >>> p = BulkheadParameters()
+        >>> p.thickness
+        25.0
+    """
+
+    thickness: float = 25.0
+
+    def __post_init__(self) -> None:
+        if self.thickness <= 0:
+            raise _furniture_error("bulkhead_thickness", "must be > 0")
+
+
+@dataclass(frozen=True)
+class FurnitureParameters:
+    """Composite of the per-type furniture parameter dataclasses (data-model §1.6).
+
+    The optional ``parameters_furniture`` entry point for :func:`build_interior`.
+
+    Example:
+        >>> p = FurnitureParameters()
+        >>> p.berth.base_height, p.galley.counter_height
+        (350.0, 900.0)
+    """
+
+    berth: BerthParameters = field(default_factory=BerthParameters)
+    galley: GalleyParameters = field(default_factory=GalleyParameters)
+    head: HeadParameters = field(default_factory=HeadParameters)
+    salon: SalonParameters = field(default_factory=SalonParameters)
+    bulkhead: BulkheadParameters = field(default_factory=BulkheadParameters)
+
+
+# ---------------------------------------------------------------------------
 # Compartment + Interior aggregate (data-model §5-§6)
 # ---------------------------------------------------------------------------
 
@@ -225,12 +392,18 @@ class LayoutSpec:
 class Compartment:
     """Wrapper around the FreeCAD Body for a single compartment.
 
+    For furnished (Alt1/Alt2) compartments ``body`` is a ``Part::Compound`` of
+    the furniture pieces (+ bulkhead) and ``furniture`` holds the individual
+    bodies; for unfurnished compartments ``body`` is the legacy single box.
+
     Example:
         >>> # Accessed via Interior.compartments after build_interior() returns.
     """
 
     spec: CompartmentSpec
     body: Any
+    furniture: tuple[Any, ...] = ()
+    is_furnished: bool = False
 
 
 @dataclass(frozen=True)
@@ -668,6 +841,231 @@ def _build_compartment(
 
 
 # ---------------------------------------------------------------------------
+# Spec 012 — furniture builders (Part::Feature B-rep, matching _build_compartment)
+#
+# The interior module's coordinate convention (spec 004): compartment
+# dimensions/positions are used directly as meter-magnitude values in
+# Part.makeBox. Furniture parameters are in mm, so they are converted to the
+# same magnitude via _MM_TO_UNIT before use, keeping furniture consistent in
+# scale with the compartment boxes.
+# ---------------------------------------------------------------------------
+
+_MM_TO_UNIT = 1.0 / 1000.0
+_FURNISHED_LAYOUTS: frozenset[str] = frozenset({"Alternativ1", "Alternativ2"})
+
+
+def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[float, float, float]) -> Any:
+    """Make a Part::Feature box at `origin` with `size` (meter-magnitude units)."""
+    import Part
+
+    dx, dy, dz = size
+    shape = Part.makeBox(dx, dy, dz)
+    shape.translate(origin)
+    obj = target_doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    added.append(obj)
+    return obj
+
+
+def _validate_furniture_envelope(
+    spec: CompartmentSpec, furniture: FurnitureParameters, source: str
+) -> None:
+    """Reject furniture taller than its compartment (FR-006)."""
+    h = spec.dimensions.height
+    if spec.compartment_type == "forward_cabin" and furniture.berth.base_height * _MM_TO_UNIT >= h:
+        raise InteriorParameterError(
+            source, spec.name, "berth_base_height", "must be less than compartment height"
+        )
+    if spec.compartment_type == "galley" and furniture.galley.counter_height * _MM_TO_UNIT >= h:
+        raise InteriorParameterError(
+            source, spec.name, "galley_counter_height", "must be less than compartment height"
+        )
+
+
+def _build_berth(
+    spec: CompartmentSpec, params: BerthParameters, label: str, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """forward_cabin → a berth base box + cushion box(es) on top."""
+    import FreeCAD
+
+    inset = params.wall_inset * _MM_TO_UNIT
+    base_h = params.base_height * _MM_TO_UNIT
+    cush_t = params.cushion_thickness * _MM_TO_UNIT
+    length = spec.dimensions.length - 2 * inset
+    width = spec.dimensions.width - 2 * inset
+    x0 = spec.position.x + inset
+    z0 = spec.position.z
+    bodies = [
+        _box(
+            target_doc, added, f"{label}_Berth",
+            FreeCAD.Vector(x0, -width / 2.0, z0), (length, width, base_h),
+        )
+    ]
+    for i in range(params.cushion_count):
+        bodies.append(
+            _box(
+                target_doc, added, f"{label}_Cushion_{i + 1}",
+                FreeCAD.Vector(x0, -width / 2.0, z0 + base_h), (length, width, cush_t),
+            )
+        )
+    return bodies
+
+
+def _build_galley_counter(
+    spec: CompartmentSpec, params: GalleyParameters, label: str, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """galley → a worktop box with blind sink + stove recesses (Part.Cut)."""
+    import FreeCAD
+    import Part
+
+    inset = 0.05
+    counter_h = params.counter_height * _MM_TO_UNIT
+    thick = params.counter_thickness * _MM_TO_UNIT
+    length = spec.dimensions.length - 2 * inset
+    width = spec.dimensions.width - 2 * inset
+    x0 = spec.position.x + inset
+    z0 = spec.position.z + counter_h - thick
+    counter = Part.makeBox(length, width, thick)
+    counter.translate(FreeCAD.Vector(x0, -width / 2.0, z0))
+
+    if params.cutouts_enabled:
+        sink_d = params.sink_recess_depth * _MM_TO_UNIT
+        stove_d = params.stove_recess_depth * _MM_TO_UNIT
+        cut_l, cut_w = length * 0.25, width * 0.4
+        top_z = z0 + thick
+        # Sink recess in the forward quarter; stove recess in the aft quarter.
+        sink = Part.makeBox(cut_l, cut_w, sink_d)
+        sink.translate(FreeCAD.Vector(x0 + length * 0.1, -cut_w / 2.0, top_z - sink_d))
+        stove = Part.makeBox(cut_l, cut_w, stove_d)
+        stove.translate(FreeCAD.Vector(x0 + length * 0.6, -cut_w / 2.0, top_z - stove_d))
+        counter = counter.cut(sink).cut(stove)
+
+    obj = target_doc.addObject("Part::Feature", f"{label}_GalleyCounter")
+    obj.Shape = counter
+    added.append(obj)
+    return [obj]
+
+
+def _build_head_fittings(
+    spec: CompartmentSpec, params: HeadParameters, label: str, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """head → a toilet box + a sink box against the walls."""
+    import FreeCAD
+
+    toilet_h = params.toilet_height * _MM_TO_UNIT
+    sink_h = params.sink_height * _MM_TO_UNIT
+    tl, tw = 0.5, 0.4
+    sl, sw, st = 0.4, 0.3, 0.15
+    x0, z0 = spec.position.x, spec.position.z
+    aft_x = spec.position.x + spec.dimensions.length
+    half_w = spec.dimensions.width / 2.0
+    return [
+        _box(
+            target_doc, added, f"{label}_Toilet",
+            FreeCAD.Vector(x0 + 0.1, -tw / 2.0, z0), (tl, tw, toilet_h),
+        ),
+        _box(
+            target_doc, added, f"{label}_Sink",
+            FreeCAD.Vector(aft_x - 0.1 - sl, half_w - sw, z0 + sink_h - st), (sl, sw, st),
+        ),
+    ]
+
+
+def _build_salon_furniture(
+    spec: CompartmentSpec, params: SalonParameters, label: str, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """salon → a settee box + a table (top + pedestal)."""
+    import FreeCAD
+
+    seat_h = params.seat_height * _MM_TO_UNIT
+    table_h = params.table_height * _MM_TO_UNIT
+    x0, z0 = spec.position.x, spec.position.z
+    width = spec.dimensions.width
+    length = spec.dimensions.length
+    settee_d = 0.5
+    settee = _box(
+        target_doc, added, f"{label}_Settee",
+        FreeCAD.Vector(x0 + 0.1, -width / 2.0 + 0.05, z0), (length - 0.2, settee_d, seat_h),
+    )
+    table_top_t = 0.04
+    table_l, table_w = length * 0.4, width * 0.4
+    cx = x0 + length / 2.0
+    table_top = _box(
+        target_doc, added, f"{label}_TableTop",
+        FreeCAD.Vector(cx - table_l / 2.0, -table_w / 2.0, z0 + table_h - table_top_t),
+        (table_l, table_w, table_top_t),
+    )
+    pedestal = _box(
+        target_doc, added, f"{label}_TablePedestal",
+        FreeCAD.Vector(cx - 0.04, -0.04, z0), (0.08, 0.08, table_h - table_top_t),
+    )
+    return [settee, table_top, pedestal]
+
+
+def _build_bulkhead(
+    spec: CompartmentSpec, params: BulkheadParameters, label: str, target_doc: Any, added: list[Any]
+) -> Any:
+    """A thin partition box at the compartment's aft boundary."""
+    import FreeCAD
+
+    thick = params.thickness * _MM_TO_UNIT
+    aft_x = spec.position.x + spec.dimensions.length - thick
+    width = spec.dimensions.width
+    height = spec.dimensions.height
+    return _box(
+        target_doc, added, f"{label}_Bulkhead",
+        FreeCAD.Vector(aft_x, -width / 2.0, spec.position.z), (thick, width, height),
+    )
+
+
+def _build_furnished_compartment(
+    spec: CompartmentSpec,
+    layout_name: str,
+    furniture: FurnitureParameters,
+    target_doc: Any,
+    added: list[Any],
+) -> Compartment:
+    """Build type-keyed furniture for one compartment, wrapped as a compound."""
+    import Part
+
+    label = _compartment_label(spec, layout_name)
+    local_added: list[Any] = []
+    pieces: list[Any]
+    if spec.compartment_type == "forward_cabin":
+        pieces = _build_berth(spec, furniture.berth, label, target_doc, local_added)
+    elif spec.compartment_type == "galley":
+        pieces = _build_galley_counter(spec, furniture.galley, label, target_doc, local_added)
+    elif spec.compartment_type == "head":
+        pieces = _build_head_fittings(spec, furniture.head, label, target_doc, local_added)
+    elif spec.compartment_type == "salon":
+        pieces = _build_salon_furniture(spec, furniture.salon, label, target_doc, local_added)
+    else:  # pragma: no cover - guarded by _COMPARTMENT_TYPES at parse time
+        pieces = []
+    pieces.append(_build_bulkhead(spec, furniture.bulkhead, label, target_doc, local_added))
+
+    target_doc.recompute()
+
+    # Galley counter manifold guard (FR-007): the cut worktop must stay a
+    # single closed solid.
+    if spec.compartment_type == "galley":
+        counter_shape = pieces[0].Shape
+        if len(counter_shape.Solids) != 1 or not counter_shape.isValid():
+            raise InteriorConstructionError(
+                f"galley counter in {spec.name} is non-manifold after recess cuts "
+                f"(solids={len(counter_shape.Solids)}, valid={counter_shape.isValid()})",
+                layout_name=layout_name,
+            )
+
+    compound_obj = target_doc.addObject("Part::Feature", label)
+    compound_obj.Shape = Part.makeCompound([p.Shape for p in pieces])
+    local_added.append(compound_obj)
+    added.extend(local_added)
+    return Compartment(
+        spec=spec, body=compound_obj, furniture=tuple(pieces), is_furnished=True
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public builder
 # ---------------------------------------------------------------------------
 
@@ -677,6 +1075,7 @@ def build_interior(
     deck: Deck,
     layout: str = "Alternativ3",
     *,
+    parameters_furniture: FurnitureParameters | None = None,
     document: Any = None,
     name: str | None = None,
 ) -> Interior:
@@ -725,6 +1124,13 @@ def build_interior(
         _validate_compartment_in_envelope(spec, hull, resolved_source)
     _validate_no_overlaps(layout_spec.compartments, resolved_source)
 
+    # spec 012 — resolve furniture; gate detailed furniture to Alt1/Alt2.
+    furniture = parameters_furniture if parameters_furniture is not None else FurnitureParameters()
+    furnished = layout_spec.layout_name in _FURNISHED_LAYOUTS
+    if furnished:
+        for spec in layout_spec.compartments:
+            _validate_furniture_envelope(spec, furniture, resolved_source)
+
     target_doc = _resolve_document(hull, document)
     resolved_label = name if name is not None else f"Interior_{layout_spec.layout_name}"
 
@@ -733,7 +1139,14 @@ def build_interior(
     try:
         compartments: list[Compartment] = []
         for spec in layout_spec.compartments:
-            compartment = _build_compartment(spec, layout_spec.layout_name, target_doc, added)
+            if furnished:
+                compartment = _build_furnished_compartment(
+                    spec, layout_spec.layout_name, furniture, target_doc, added
+                )
+            else:
+                compartment = _build_compartment(
+                    spec, layout_spec.layout_name, target_doc, added
+                )
             compartments.append(compartment)
         target_doc.recompute()
     except InteriorParameterError:

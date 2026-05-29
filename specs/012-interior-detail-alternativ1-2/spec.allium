@@ -1,0 +1,390 @@
+-- allium: 3
+--
+-- Spec 012 — interior-detail-alternativ1-2
+--
+-- Replaces the boxy Alt1/Alt2 compartment placeholders with type-keyed
+-- furniture: forward_cabin -> berth + cushion, galley -> counter with blind
+-- sink/stove recesses, head -> toilet + sink, salon -> seating + table, plus
+-- bulkheads. PartDesign bodies; blind recesses (manifold-safe); gated to
+-- Alt1/Alt2 (Alt3-5 in spec 013). Geometry only (materials = spec 015).
+-- PATCH bump 1.0.5 -> 1.0.6.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+
+    default_berth_base_height_mm: Decimal = 350.0
+    default_berth_cushion_thickness_mm: Decimal = 100.0
+    default_berth_wall_inset_mm: Decimal = 50.0
+
+    default_galley_counter_height_mm: Decimal = 900.0
+    default_galley_counter_thickness_mm: Decimal = 40.0
+    default_galley_sink_recess_depth_mm: Decimal = 30.0
+    default_galley_stove_recess_depth_mm: Decimal = 20.0
+
+    default_head_toilet_height_mm: Decimal = 400.0
+    default_head_sink_height_mm: Decimal = 800.0
+
+    default_salon_seat_height_mm: Decimal = 400.0
+    default_salon_table_height_mm: Decimal = 650.0
+
+    default_bulkhead_thickness_mm: Decimal = 25.0
+}
+
+-- External entities — from spec 004 (interior) + 006/008, consumed here.
+
+external entity Compartment {
+    name: String
+    compartment_type: forward_cabin | galley | head | salon
+    length_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+}
+
+external entity Layout {
+    layout_name: String
+    is_alt1_or_alt2: Boolean
+}
+
+-- Value types — parametric inputs, no identity. All lengths mm.
+
+value BerthParameters {
+    base_height_mm: Decimal
+    cushion_thickness_mm: Decimal
+    cushion_count: Integer
+    wall_inset_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.base_height_mm > 0
+        this.cushion_thickness_mm > 0
+    }
+
+    invariant NonNegativeCushions {
+        this.cushion_count >= 0
+    }
+
+    invariant NonNegativeInset {
+        this.wall_inset_mm >= 0
+    }
+}
+
+value GalleyParameters {
+    counter_height_mm: Decimal
+    counter_thickness_mm: Decimal
+    sink_recess_depth_mm: Decimal
+    stove_recess_depth_mm: Decimal
+    cutouts_enabled: Boolean
+
+    invariant PositiveDimensions {
+        this.counter_height_mm > 0
+        this.counter_thickness_mm > 0
+    }
+
+    invariant RecessesBlindNotThrough {
+        this.sink_recess_depth_mm < this.counter_thickness_mm
+        this.stove_recess_depth_mm < this.counter_thickness_mm
+    }
+}
+
+value HeadParameters {
+    toilet_height_mm: Decimal
+    sink_height_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.toilet_height_mm > 0
+        this.sink_height_mm > 0
+    }
+}
+
+value SalonParameters {
+    seat_height_mm: Decimal
+    table_height_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.seat_height_mm > 0
+        this.table_height_mm > 0
+    }
+}
+
+value BulkheadParameters {
+    thickness_mm: Decimal
+
+    invariant PositiveThickness {
+        this.thickness_mm > 0
+    }
+}
+
+value FurnitureParameters {
+    berth: BerthParameters
+    galley: GalleyParameters
+    head: HeadParameters
+    salon: SalonParameters
+    bulkhead: BulkheadParameters
+}
+
+-- Output entities — produced by the build operation.
+
+entity BerthBody {
+    parameters: BerthParameters
+    compartment: Compartment
+    is_brep_solid: Boolean
+    within_envelope: Boolean
+    has_cushion: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_brep_solid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant InsideCompartment {
+        this.within_envelope = true
+    }
+}
+
+entity GalleyCounterBody {
+    parameters: GalleyParameters
+    compartment: Compartment
+    is_brep_solid: Boolean
+    within_envelope: Boolean
+    has_sink_recess: Boolean
+    has_stove_recess: Boolean
+    is_single_solid: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_brep_solid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant StaysManifold {
+        this.is_single_solid = true
+    }
+
+    invariant InsideCompartment {
+        this.within_envelope = true
+    }
+}
+
+entity HeadFittingBody {
+    parameters: HeadParameters
+    compartment: Compartment
+    is_toilet: Boolean
+    is_brep_solid: Boolean
+    within_envelope: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_brep_solid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant InsideCompartment {
+        this.within_envelope = true
+    }
+}
+
+entity SalonFurnitureBody {
+    parameters: SalonParameters
+    compartment: Compartment
+    is_table: Boolean
+    is_brep_solid: Boolean
+    within_envelope: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_brep_solid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant InsideCompartment {
+        this.within_envelope = true
+    }
+}
+
+entity BulkheadBody {
+    parameters: BulkheadParameters
+    is_brep_solid: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_brep_solid = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity FurnishedCompartment {
+    compartment: Compartment
+    layout: Layout
+    parameters: FurnitureParameters
+    is_furnished: Boolean
+    shape_digest: String
+
+    invariant FurnishedOnlyForAlt1Alt2 {
+        this.is_furnished = this.layout.is_alt1_or_alt2
+    }
+}
+
+-- Rules — parameter validation + the build operation.
+
+rule ValidateFurnitureParameters {
+    when: FurnishCompartment(compartment, layout, params)
+    requires:
+        params.berth.base_height_mm > 0
+        params.berth.cushion_thickness_mm > 0
+        params.berth.cushion_count >= 0
+        params.galley.counter_height_mm > 0
+        params.galley.counter_thickness_mm > 0
+        params.galley.sink_recess_depth_mm < params.galley.counter_thickness_mm
+        params.galley.stove_recess_depth_mm < params.galley.counter_thickness_mm
+        params.head.toilet_height_mm > 0
+        params.head.sink_height_mm > 0
+        params.salon.seat_height_mm > 0
+        params.salon.table_height_mm > 0
+        params.bulkhead.thickness_mm > 0
+}
+
+rule RejectFurnitureExceedingEnvelope {
+    when: FurnishCompartment(compartment, layout, params)
+    requires:
+        params.berth.base_height_mm < compartment.height_mm
+        params.galley.counter_height_mm < compartment.height_mm
+}
+
+rule GateFurnitureToAlt1Alt2 {
+    -- Detailed furniture is built only for Alt1/Alt2; other layouts keep
+    -- their boxy placeholders (spec 013 enables them).
+    when: FurnishCompartment(compartment, layout, params)
+    requires: layout.is_alt1_or_alt2 = true
+    ensures:
+        FurnishedCompartment.created(
+            compartment: compartment, layout: layout, parameters: params, is_furnished: true
+        )
+}
+
+rule BuildBerth {
+    when: BuildBerth(params, compartment)
+    requires: compartment.compartment_type = forward_cabin
+    ensures:
+        BerthBody.created(
+            parameters: params, compartment: compartment,
+            is_brep_solid: true, within_envelope: true
+        )
+}
+
+rule BuildGalleyCounter {
+    when: BuildGalleyCounter(params, compartment)
+    requires:
+        compartment.compartment_type = galley
+        params.sink_recess_depth_mm < params.counter_thickness_mm
+        params.stove_recess_depth_mm < params.counter_thickness_mm
+    ensures:
+        GalleyCounterBody.created(
+            parameters: params, compartment: compartment,
+            is_brep_solid: true, within_envelope: true, is_single_solid: true
+        )
+}
+
+rule SkipGalleyCutoutsWhenDisabled {
+    when: BuildGalleyCounter(params, compartment)
+    requires: params.cutouts_enabled = false
+    ensures: GalleyCounterHasNoRecesses(compartment)
+}
+
+rule BuildHeadFittings {
+    when: BuildHeadFittings(params, compartment)
+    requires: compartment.compartment_type = head
+    ensures:
+        HeadFittingBody.created(
+            parameters: params, compartment: compartment, is_toilet: true,
+            is_brep_solid: true, within_envelope: true
+        )
+}
+
+rule BuildSalonFurniture {
+    when: BuildSalonFurniture(params, compartment)
+    requires: compartment.compartment_type = salon
+    ensures:
+        SalonFurnitureBody.created(
+            parameters: params, compartment: compartment, is_table: true,
+            is_brep_solid: true, within_envelope: true
+        )
+}
+
+rule BuildBulkhead {
+    -- A thin partition body at a compartment's aft boundary (FR-001).
+    when: BuildBulkhead(params, compartment)
+    ensures:
+        BulkheadBody.created(parameters: params, is_brep_solid: true)
+}
+
+rule RollbackOnPartialFailure {
+    when: FurnitureConstructionFails(layout)
+    ensures: DocumentRestoredToPreCallState(layout)
+}
+
+-- Global invariants — must hold across ALL instances.
+
+invariant AllFurnitureIsBrepSolid {
+    for b in BerthBody:
+        b.is_brep_solid = true
+}
+
+invariant GalleyCounterAlwaysManifold {
+    -- The spec 009/011 non-manifold regression guard.
+    for g in GalleyCounterBody:
+        g.is_single_solid = true
+}
+
+invariant AllFurnitureWithinEnvelope {
+    for b in BerthBody:
+        b.within_envelope = true
+}
+
+invariant FurnishedImpliesAlt1Alt2 {
+    for f in FurnishedCompartment:
+        f.is_furnished = f.layout.is_alt1_or_alt2
+}
+
+invariant DeterministicShapeDigest {
+    for f1 in FurnishedCompartment:
+        for f2 in FurnishedCompartment:
+            f1.shape_digest = f2.shape_digest
+}
+
+invariant ReferenceFidelityWithinOnePercent {
+    for f in FurnishedCompartment:
+        ReferenceDeviationPct(f) <= 1.0
+}
+
+-- Actors and surfaces — the library's public API.
+
+actor LibraryConsumer { identified_by: Layout }
+
+surface InteriorFurnishAPI {
+    facing consumer: LibraryConsumer
+    context layout: Layout
+    context compartment: Compartment
+    context params: FurnitureParameters
+    provides: FurnishCompartment(compartment, layout, params)
+    exposes: FurnishedCompartment
+}
+
+-- Deferred items — out of scope for "basic" furniture.
+
+deferred BerthBody.upholstery_seams
+deferred HeadFittingBody.contoured_toilet_and_faucet
+deferred GalleyCounterBody.appliance_detail_and_fascia
+deferred SalonFurnitureBody.cushioned_settee_contour
+deferred FurnishedCompartment.alt3_alt4_alt5_layouts
+deferred FurnishedCompartment.materials_and_colors
+-- GAP-3 (/tla): pre-build envelope guard validates piece height only; full
+-- footprint containment is enforced by construction + geometry test.
+deferred FurnishedCompartment.full_footprint_envelope_prevalidation
+-- GAP-1 (/tla discovery): the interior module builds at meter-magnitude
+-- (a 2.4 m cabin -> 2.4 mm box), ~1000x smaller than the mm-scale hull;
+-- spec 012 furniture matches that convention for internal consistency. The
+-- m->mm scale fix is tracked as a separate register entry (spec 017).
+deferred FurnishedCompartment.interior_to_hull_scale_fix
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md -> ## Clarifications -> Session 2026-05-29).

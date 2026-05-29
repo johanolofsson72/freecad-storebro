@@ -56,17 +56,25 @@ from storebro.hull import (
     build_hull,
 )
 from storebro.interior import (
+    BerthParameters,
+    BulkheadParameters,
+    FurnitureParameters,
+    GalleyParameters,
+    HeadParameters,
     Interior,
     InteriorConstructionError,
     InteriorParameterError,
+    SalonParameters,
     build_interior,
 )
 
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 __all__ = [
     "AnchorLockerParameters",
+    "BerthParameters",
     "BowPulpitParameters",
+    "BulkheadParameters",
     "CabinTrunkParameters",
     "CabinWindowParameters",
     "CleatParameters",
@@ -80,7 +88,10 @@ __all__ = [
     "ExportArtifact",
     "ExportInputError",
     "ExportWriteError",
+    "FurnitureParameters",
+    "GalleyParameters",
     "HardtopParameters",
+    "HeadParameters",
     "Hull",
     "HullConstructionError",
     "HullGlazingParameters",
@@ -95,6 +106,7 @@ __all__ = [
     "PortholeParameters",
     "RailingParameters",
     "RubrailParameters",
+    "SalonParameters",
     "WindshieldGlazingParameters",
     "WindshieldParameters",
     "__version__",
