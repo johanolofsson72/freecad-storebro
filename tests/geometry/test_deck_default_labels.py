@@ -16,6 +16,14 @@ REQUIRED_LABELS = {
     "Deck_Railings",
 }
 
+REQUIRED_HARDWARE_LABELS = {
+    "Deck_Rubrail",
+    "Deck_BowPulpit",
+    "Deck_Lifelines",
+    "Deck_AnchorLocker",
+    "Deck_Cleats",
+}
+
 
 def test_default_labels(freecad_doc: object) -> None:
     hull = build_hull(document=freecad_doc)
@@ -35,6 +43,24 @@ def test_default_labels(freecad_doc: object) -> None:
         assert any(label.startswith(required) for label in sub_labels), (
             f"missing or differently-labeled sub-Body: expected prefix {required!r}, "
             f"got {sub_labels}"
+        )
+
+
+def test_hardware_labels(freecad_doc: object) -> None:
+    """Spec 010: the five hardware items carry Deck_<Item> labels."""
+    hull = build_hull(document=freecad_doc)
+    deck = build_deck(hull)
+    hw_labels = {
+        deck.rubrail.body.Label,
+        deck.bow_pulpit.body.Label,
+        deck.lifelines.body.Label,
+        deck.anchor_locker.body.Label,
+        deck.cleats.body.Label,
+    }
+    for required in REQUIRED_HARDWARE_LABELS:
+        assert any(label.startswith(required) for label in hw_labels), (
+            f"missing or differently-labeled hardware body: expected prefix "
+            f"{required!r}, got {hw_labels}"
         )
 
 

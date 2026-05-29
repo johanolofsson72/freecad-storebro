@@ -1,0 +1,544 @@
+-- allium: 3
+--
+-- Spec 010 — deck-hardware-basic
+--
+-- Adds five classes of basic deck hardware to the Storebro deck:
+-- rubrail, bow pulpit, lifelines, anchor locker, cleats. Each is a
+-- FreeCAD PartDesign body (or a compound of bodies), parameterized by a
+-- frozen value type, seated on the ACTUAL sampled hull/deck geometry, and
+-- built by default so existing build_deck() callers get the hardware
+-- automatically. Implements the spec 008 deferred item
+-- `SuperstructureBundle.rubrail`.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+    sheer_seating_tolerance_mm: Decimal = 1.0
+
+    default_rubrail_height_mm: Decimal = 60.0
+    default_rubrail_thickness_mm: Decimal = 40.0
+    default_rubrail_forward_x_mm: Decimal = 300.0
+    default_rubrail_aft_x_mm: Decimal = 10000.0
+
+    default_bow_pulpit_tube_diameter_mm: Decimal = 25.0
+    default_bow_pulpit_height_mm: Decimal = 600.0
+    default_bow_pulpit_forward_extent_mm: Decimal = 400.0
+    default_bow_pulpit_stanchion_count: Integer = 2
+
+    default_lifeline_count: Integer = 1
+    default_lifeline_tube_diameter_mm: Decimal = 12.0
+    default_lifeline_height_fraction: Decimal = 1.0
+
+    default_anchor_locker_length_mm: Decimal = 500.0
+    default_anchor_locker_width_mm: Decimal = 400.0
+    default_anchor_locker_height_mm: Decimal = 150.0
+    default_anchor_locker_center_x_mm: Decimal = 8500.0
+
+    default_cleat_count_per_station: Integer = 1
+    default_cleat_station_count: Integer = 2
+    default_cleat_length_mm: Decimal = 200.0
+    default_cleat_height_mm: Decimal = 80.0
+}
+
+-- External entities — produced by earlier specs, consumed here.
+
+external entity HullBody {
+    loa_mm: Decimal
+    beam_max_mm: Decimal
+    sheer_z_aft_mm: Decimal
+    sheer_z_fwd_mm: Decimal
+}
+
+external entity DeckPlate {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    top_z_amidships_mm: Decimal
+    width_amidships_mm: Decimal
+}
+
+external entity CabinTrunkBody {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+}
+
+-- The railing posts from spec 008 (lifelines attach to these) are modeled
+-- via HardwareBundle.railing_post_count_per_side + the LifelinesRequirePosts
+-- invariant rather than a standalone external entity, since the build driver
+-- only needs the per-side post count to position lifelines.
+
+-- Value types — parametric inputs, no identity. All lengths mm, angles deg.
+
+value RubrailParameters {
+    height_mm: Decimal
+    thickness_mm: Decimal
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.height_mm > 0
+        this.thickness_mm > 0
+    }
+
+    invariant LongitudinalOrdering {
+        this.forward_x_mm < this.aft_x_mm
+    }
+
+    invariant NonNegativeStations {
+        this.forward_x_mm >= 0
+    }
+}
+
+value BowPulpitParameters {
+    tube_diameter_mm: Decimal
+    height_mm: Decimal
+    forward_extent_mm: Decimal
+    stanchion_count: Integer
+
+    invariant PositiveDimensions {
+        this.tube_diameter_mm > 0
+        this.height_mm > 0
+        this.forward_extent_mm >= 0
+    }
+
+    invariant NonNegativeStanchionCount {
+        this.stanchion_count >= 0
+    }
+}
+
+value LifelineParameters {
+    line_count: Integer
+    tube_diameter_mm: Decimal
+    height_fraction: Decimal
+
+    invariant NonNegativeLineCount {
+        this.line_count >= 0
+    }
+
+    invariant PositiveDiameter {
+        this.tube_diameter_mm > 0
+    }
+
+    invariant HeightFractionBounded {
+        this.height_fraction > 0
+        this.height_fraction <= 1.0
+    }
+}
+
+value AnchorLockerParameters {
+    length_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+    center_x_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.width_mm > 0
+        this.height_mm > 0
+    }
+
+    invariant NonNegativeStation {
+        this.center_x_mm >= 0
+    }
+}
+
+value CleatParameters {
+    count_per_station: Integer
+    station_count: Integer
+    length_mm: Decimal
+    height_mm: Decimal
+
+    invariant NonNegativeCounts {
+        this.count_per_station >= 0
+        this.station_count >= 0
+    }
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.height_mm > 0
+    }
+}
+
+value DeckHardwareParameters {
+    rubrail: RubrailParameters
+    bow_pulpit: BowPulpitParameters
+    lifelines: LifelineParameters
+    anchor_locker: AnchorLockerParameters
+    cleats: CleatParameters
+}
+
+-- Output entities — produced by the build operation.
+
+entity RubrailBody {
+    parameters: RubrailParameters
+    bundle: HardwareBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    is_lofted_between_station_sketches: Boolean
+    follows_sampled_sheer: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant LoftedNotSwept {
+        this.is_lofted_between_station_sketches = true
+    }
+
+    invariant SeatedOnSampledSheer {
+        this.follows_sampled_sheer = true
+    }
+}
+
+entity BowPulpitBody {
+    parameters: BowPulpitParameters
+    bundle: HardwareBundle
+    is_partdesign_body: Boolean
+    is_tubular: Boolean
+    top_z_above_deck_mm: Decimal
+    is_symmetric_about_centerline: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant Symmetric {
+        this.is_symmetric_about_centerline = true
+    }
+}
+
+entity LifelineBody {
+    parameters: LifelineParameters
+    bundle: HardwareBundle
+    is_port: Boolean
+    line_index: Integer
+    is_partdesign_body: Boolean
+    attaches_to_railing_posts: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant AnchoredToPosts {
+        this.attaches_to_railing_posts = true
+    }
+}
+
+entity AnchorLockerBody {
+    parameters: AnchorLockerParameters
+    bundle: HardwareBundle
+    is_partdesign_body: Boolean
+    is_raised_box_not_recess: Boolean
+    center_x_mm: Decimal
+    within_deck_footprint: Boolean
+    forward_of_cabin_trunk: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant RaisedBox {
+        this.is_raised_box_not_recess = true
+    }
+
+    invariant ForwardAndInFootprint {
+        this.within_deck_footprint = true
+        this.forward_of_cabin_trunk = true
+    }
+}
+
+entity CleatBody {
+    parameters: CleatParameters
+    bundle: HardwareBundle
+    longitudinal_x_mm: Decimal
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    deck_top_z_at_x_mm: Decimal
+    bounding_box_min_z_mm: Decimal
+    volume_mm3: Decimal
+
+    invariant ValidBody {
+        this.is_partdesign_body = true
+        this.volume_mm3 > 0
+    }
+
+    invariant SeatedOnDeck {
+        this.bounding_box_min_z_mm >= this.deck_top_z_at_x_mm - 1.0
+    }
+}
+
+entity HardwareBundle {
+    hull: HullBody
+    deck_plate: DeckPlate
+    cabin_trunk: CabinTrunkBody
+    parameters: DeckHardwareParameters
+    railing_post_count_per_side: Integer
+    anchor_locker: AnchorLockerBody
+    bow_pulpit: BowPulpitBody
+    shape_digest: String
+
+    rubrails: RubrailBody with bundle = this
+    cleats: CleatBody with bundle = this
+    lifelines: LifelineBody with bundle = this
+    port_rubrails: rubrails where is_port = true
+    starboard_rubrails: rubrails where is_port = false
+    port_cleats: cleats where is_port = true
+    starboard_cleats: cleats where is_port = false
+    expected_cleat_total: parameters.cleats.count_per_station * parameters.cleats.station_count * 2
+
+    invariant RubrailsSymmetricPortStarboard {
+        this.port_rubrails.count = this.starboard_rubrails.count
+    }
+
+    invariant CleatsSymmetricPortStarboard {
+        this.port_cleats.count = this.starboard_cleats.count
+    }
+
+    invariant CleatTotalMatchesParameters {
+        this.cleats.count = this.expected_cleat_total
+    }
+
+    invariant LifelinesRequirePosts {
+        this.railing_post_count_per_side = 0
+            implies this.lifelines.count = 0
+    }
+}
+
+-- Rules — parameter validation, the build operation, and per-item builders.
+
+rule ValidateDeckHardwareParameters {
+    when: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    requires:
+        params.rubrail.height_mm > 0
+        params.rubrail.thickness_mm > 0
+        params.rubrail.forward_x_mm < params.rubrail.aft_x_mm
+        params.bow_pulpit.tube_diameter_mm > 0
+        params.bow_pulpit.height_mm > 0
+        params.bow_pulpit.stanchion_count >= 0
+        params.lifelines.line_count >= 0
+        params.lifelines.tube_diameter_mm > 0
+        params.lifelines.height_fraction > 0
+        params.lifelines.height_fraction <= 1.0
+        params.anchor_locker.length_mm > 0
+        params.anchor_locker.width_mm > 0
+        params.anchor_locker.height_mm > 0
+        params.cleats.count_per_station >= 0
+        params.cleats.station_count >= 0
+        params.cleats.length_mm > 0
+        params.cleats.height_mm > 0
+}
+
+rule RejectAnchorLockerOverlappingCabinTrunk {
+    -- The anchor locker must sit forward of the cabin trunk.
+    when: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    requires:
+        params.anchor_locker.center_x_mm + (params.anchor_locker.length_mm / 2)
+            <= cabin_trunk.forward_x_mm
+}
+
+rule RejectAnchorLockerPastDeckEdge {
+    -- The anchor locker must fit within the deck footprint longitudinally.
+    when: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    requires:
+        params.anchor_locker.center_x_mm - (params.anchor_locker.length_mm / 2)
+            >= deck_plate.forward_x_mm
+}
+
+rule RejectRubrailPastDeckExtent {
+    when: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    requires:
+        params.rubrail.aft_x_mm <= deck_plate.aft_x_mm
+}
+
+rule BuildDeckHardware {
+    when: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    ensures:
+        HardwareBundle.created(
+            hull: hull,
+            deck_plate: deck_plate,
+            cabin_trunk: cabin_trunk,
+            parameters: params
+        )
+}
+
+rule BuildOneRubrail {
+    -- One rubrail body per side, lofted between sampled-sheer station sketches.
+    when: BuildOneRubrail(params, deck_plate, hull, side)
+    ensures:
+        RubrailBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            is_lofted_between_station_sketches: true,
+            follows_sampled_sheer: true
+        )
+}
+
+rule BuildBowPulpit {
+    when: BuildBowPulpit(params, deck_plate, hull)
+    ensures:
+        BowPulpitBody.created(
+            parameters: params,
+            is_partdesign_body: true,
+            is_tubular: true,
+            is_symmetric_about_centerline: true
+        )
+}
+
+rule BuildOneLifeline {
+    -- One lifeline body per side per line, strung between railing posts.
+    when: BuildOneLifeline(params, railing, side, line_index)
+    requires:
+        params.line_count > 0
+        railing.post_count_per_side > 0
+    ensures:
+        LifelineBody.created(
+            parameters: params,
+            is_port: side,
+            line_index: line_index,
+            is_partdesign_body: true,
+            attaches_to_railing_posts: true
+        )
+}
+
+rule SkipLifelinesWithoutPosts {
+    -- Zero-post fallback: lifelines have nothing to attach to, so none built.
+    when: BuildLifelines(params, railing)
+    requires: railing.post_count_per_side = 0
+    ensures: NoLifelinesBuilt(railing)
+}
+
+rule BuildAnchorLocker {
+    when: BuildAnchorLocker(params, deck_plate)
+    ensures:
+        AnchorLockerBody.created(
+            parameters: params,
+            is_partdesign_body: true,
+            is_raised_box_not_recess: true,
+            center_x_mm: params.center_x_mm,
+            within_deck_footprint: true,
+            forward_of_cabin_trunk: true
+        )
+}
+
+rule BuildOneCleat {
+    -- One cleat body per (station, side), seated on the actual deck top.
+    when: BuildOneCleat(params, deck_plate, x, side)
+    requires:
+        params.count_per_station > 0
+        params.station_count > 0
+    ensures:
+        CleatBody.created(
+            parameters: params,
+            longitudinal_x_mm: x,
+            is_port: side,
+            is_partdesign_body: true
+        )
+}
+
+rule RollbackOnPartialFailure {
+    -- Any FreeCAD-side failure mid-build removes every body added so far.
+    when: HardwareConstructionFails(bundle)
+    ensures: DocumentRestoredToPreCallState(bundle)
+}
+
+-- Global invariants — must hold across ALL HardwareBundle / body instances.
+
+invariant ReferenceFidelityWithinOnePercent {
+    for b in HardwareBundle:
+        ReferenceDeviationPct(b) <= 1.0
+}
+
+invariant DeterministicShapeDigest {
+    -- Two builds with identical inputs produce identical shape_digest.
+    for b1 in HardwareBundle:
+        for b2 in HardwareBundle:
+            b1.shape_digest = b2.shape_digest
+}
+
+invariant FreeCADIdiomaticAllRubrails {
+    for r in RubrailBody:
+        r.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllCleats {
+    for c in CleatBody:
+        c.is_partdesign_body = true
+}
+
+invariant RubrailsAlwaysLofted {
+    for r in RubrailBody:
+        r.is_lofted_between_station_sketches = true
+}
+
+invariant RubrailsFollowSheer {
+    for r in RubrailBody:
+        r.follows_sampled_sheer = true
+}
+
+invariant CleatsSeatedOnDeck {
+    for c in CleatBody:
+        c.bounding_box_min_z_mm >= c.deck_top_z_at_x_mm - 1.0
+}
+
+invariant AnchorLockerIsRaisedBox {
+    for a in AnchorLockerBody:
+        a.is_raised_box_not_recess = true
+}
+
+invariant LifelinesAnchoredToPosts {
+    for l in LifelineBody:
+        l.attaches_to_railing_posts = true
+}
+
+invariant SymmetricRubrails {
+    for b in HardwareBundle:
+        b.port_rubrails.count = b.starboard_rubrails.count
+}
+
+invariant SymmetricCleats {
+    for b in HardwareBundle:
+        b.port_cleats.count = b.starboard_cleats.count
+}
+
+-- Actors and surfaces — the library's public API. No human-facing UI;
+-- the consumer is a Python API call or CLI invocation, identified by the
+-- HullBody it passes in.
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface DeckHardwareBuildAPI {
+    facing consumer: LibraryConsumer
+    context hull: HullBody
+    context deck_plate: DeckPlate
+    context cabin_trunk: CabinTrunkBody
+    context params: DeckHardwareParameters
+    provides: BuildDeckHardware(hull, deck_plate, cabin_trunk, params)
+    exposes:
+        HardwareBundle
+        consumer.loa_mm
+}
+
+-- Deferred items — known limitations + future work, consistent with the
+-- "basic" scope of this spec.
+
+deferred RubrailBody.moulded_teak_profile_with_chrome_insert
+deferred BowPulpitBody.bent_tube_radii_and_welded_joints
+deferred LifelineBody.catenary_sag
+deferred AnchorLockerBody.functional_recessed_cavity
+deferred CleatBody.contoured_casting
+deferred HardwareBundle.colors_and_materials
+-- Module-wide hardening, surfaced during spec 010 implementation: the
+-- `value <= 0` guards (shared by every spec 003/008/010 deck dataclass) do
+-- not reject non-finite NaN/inf dimensions. Deferred as a uniform change
+-- across all 11 dataclasses rather than bolted onto spec 010's five.
+deferred DeckHardwareParameters.reject_non_finite_dimensions
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md -> ## Clarifications -> Session 2026-05-29).

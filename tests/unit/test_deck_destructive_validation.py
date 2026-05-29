@@ -22,12 +22,17 @@ from __future__ import annotations
 import pytest
 
 from storebro.deck import (
+    AnchorLockerParameters,
+    BowPulpitParameters,
     CabinTrunkParameters,
+    CleatParameters,
     DeckParameterError,
     DeckSuperstructureParameters,
     HardtopParameters,
+    LifelineParameters,
     PillarParameters,
     RailingParameters,
+    RubrailParameters,
     WindshieldParameters,
 )
 
@@ -157,3 +162,84 @@ def test_railing_forward_x_greater_than_aft_x_raises() -> None:
     with pytest.raises(DeckParameterError) as exc:
         RailingParameters(forward_x=9000.0, aft_x=5000.0)
     assert exc.value.parameter_name == "railing_forward_x<>aft_x"
+
+
+# ---------------------------------------------------------------------------
+# Spec 010 — deck-hardware destructive parameter validation (T031).
+#
+# Dataclass-level negative paths across the 6 attack categories. Cross-deck
+# collision paths (anchor locker vs cabin trunk, rubrail vs deck extent) need
+# the built deck plate and live in the geometry tier
+# (tests/geometry/test_deck_hardware_anchor_locker_placement.py).
+# ---------------------------------------------------------------------------
+
+
+# Category 1: invalid input (negative, zero). NOTE: like every other deck
+# dataclass in this module (spec 003/008), the `value <= 0` guards do NOT
+# reject non-finite NaN/inf — that hardening would be a module-wide change
+# applied uniformly to all 11 dataclasses, tracked as
+# `DeckParameters.reject_non_finite` rather than bolted onto spec 010's five.
+@pytest.mark.parametrize("value", [-1.0, 0.0])
+def test_rubrail_invalid_height_raises(value: float) -> None:
+    with pytest.raises(DeckParameterError):
+        RubrailParameters(height=value)
+
+
+@pytest.mark.parametrize("value", [-5.0, 0.0])
+def test_cleat_invalid_length_raises(value: float) -> None:
+    with pytest.raises(DeckParameterError):
+        CleatParameters(length=value)
+
+
+# Category 4: boundary values.
+def test_lifeline_height_fraction_lower_boundary_zero_raises() -> None:
+    with pytest.raises(DeckParameterError) as exc:
+        LifelineParameters(height_fraction=0.0)
+    assert exc.value.parameter_name == "lifeline_height_fraction"
+
+
+def test_lifeline_height_fraction_upper_boundary_one_ok() -> None:
+    assert LifelineParameters(height_fraction=1.0).height_fraction == 1.0
+
+
+def test_lifeline_height_fraction_just_above_one_raises() -> None:
+    with pytest.raises(DeckParameterError):
+        LifelineParameters(height_fraction=1.0000001)
+
+
+def test_rubrail_equal_forward_aft_boundary_raises() -> None:
+    with pytest.raises(DeckParameterError) as exc:
+        RubrailParameters(forward_x=2000.0, aft_x=2000.0)
+    assert exc.value.parameter_name == "rubrail_forward_x<>aft_x"
+
+
+# Category: extreme magnitude (very large still valid → no raise).
+def test_extreme_but_valid_rubrail_constructs() -> None:
+    p = RubrailParameters(height=1e6, thickness=1e6, forward_x=0.0, aft_x=1e9)
+    assert p.aft_x == 1e9
+
+
+# Zero-count no-op paths (FR-016) must NOT raise.
+def test_zero_count_hardware_does_not_raise() -> None:
+    CleatParameters(count_per_station=0, station_count=0)
+    LifelineParameters(line_count=0)
+    BowPulpitParameters(stanchion_count=0)
+
+
+# Negative counts DO raise.
+@pytest.mark.parametrize(
+    ("ctor", "kwargs", "name"),
+    [
+        (CleatParameters, {"count_per_station": -1}, "cleat_count_per_station"),
+        (CleatParameters, {"station_count": -1}, "cleat_station_count"),
+        (LifelineParameters, {"line_count": -1}, "lifeline_line_count"),
+        (BowPulpitParameters, {"stanchion_count": -1}, "bow_pulpit_stanchion_count"),
+        (AnchorLockerParameters, {"center_x": -1.0}, "anchor_locker_center_x"),
+    ],
+)
+def test_negative_counts_and_positions_raise(
+    ctor: type, kwargs: dict[str, float], name: str
+) -> None:
+    with pytest.raises(DeckParameterError) as exc:
+        ctor(**kwargs)
+    assert exc.value.parameter_name == name

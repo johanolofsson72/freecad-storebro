@@ -43,15 +43,21 @@ def _vec_m(x: float, y: float, z: float) -> Any:
 
 
 __all__ = [
+    "AnchorLockerParameters",
+    "BowPulpitParameters",
     "CabinTrunkParameters",
+    "CleatParameters",
     "Deck",
     "DeckConstructionError",
+    "DeckHardwareParameters",
     "DeckParameterError",
     "DeckParameters",
     "DeckSuperstructureParameters",
     "HardtopParameters",
+    "LifelineParameters",
     "PillarParameters",
     "RailingParameters",
+    "RubrailParameters",
     "WindshieldParameters",
     "build_deck",
 ]
@@ -692,6 +698,200 @@ class DeckSuperstructureParameters:
 
 
 # ---------------------------------------------------------------------------
+# Spec 010 — deck-hardware parameter dataclasses (data-model §1)
+#
+# Five per-item parameter shapes + a composite, mirroring the spec 008
+# superstructure dataclasses. All lengths in mm, all angles in degrees.
+# Defaults are RC34 1972 estimate-grade values (research.md §R7). Each
+# __post_init__ raises DeckParameterError on out-of-range input.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RubrailParameters:
+    """Rubrail (wooden sheer strip) parameters (data-model §1.1).
+
+    The rubrail is lofted between rectangular cross-section sketches at the
+    sampled sheer stations, on both port and starboard sides.
+
+    Example:
+        >>> p = RubrailParameters()
+        >>> p.height, p.thickness
+        (60.0, 40.0)
+        >>> RubrailParameters(forward_x=300.0, aft_x=10000.0).aft_x
+        10000.0
+    """
+
+    height: float = 60.0
+    thickness: float = 40.0
+    forward_x: float = 300.0
+    aft_x: float = 10000.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("rubrail_height", self.height),
+            ("rubrail_thickness", self.thickness),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        if self.forward_x < 0:
+            raise DeckParameterError("rubrail_forward_x", self.forward_x, ">= 0")
+        if self.forward_x >= self.aft_x:
+            raise DeckParameterError(
+                "rubrail_forward_x<>aft_x",
+                None,
+                "forward_x must be < aft_x",
+            )
+
+
+@dataclass(frozen=True)
+class BowPulpitParameters:
+    """Bow pulpit (tubular bow guard rail) parameters (data-model §1.2).
+
+    Modeled as straight tubular stanchions + connecting top-rail segments
+    at the bow, symmetric about the centerline.
+
+    Example:
+        >>> p = BowPulpitParameters()
+        >>> p.tube_diameter, p.stanchion_count
+        (25.0, 2)
+    """
+
+    tube_diameter: float = 25.0
+    height: float = 600.0
+    forward_extent: float = 400.0
+    stanchion_count: int = 2
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("bow_pulpit_tube_diameter", self.tube_diameter),
+            ("bow_pulpit_height", self.height),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        if self.forward_extent < 0:
+            raise DeckParameterError("bow_pulpit_forward_extent", self.forward_extent, ">= 0")
+        if self.stanchion_count < 0:
+            raise DeckParameterError("bow_pulpit_stanchion_count", self.stanchion_count, ">= 0")
+
+
+@dataclass(frozen=True)
+class LifelineParameters:
+    """Lifeline (horizontal tube between railing posts) parameters (data-model §1.3).
+
+    Defaults to a single upper line at full railing height. Lifelines are
+    skipped entirely when the railing has zero posts (FR-017).
+
+    Example:
+        >>> p = LifelineParameters()
+        >>> p.line_count, p.tube_diameter, p.height_fraction
+        (1, 12.0, 1.0)
+    """
+
+    line_count: int = 1
+    tube_diameter: float = 12.0
+    height_fraction: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.line_count < 0:
+            raise DeckParameterError("lifeline_line_count", self.line_count, ">= 0")
+        if self.tube_diameter <= 0:
+            raise DeckParameterError("lifeline_tube_diameter", self.tube_diameter, "> 0")
+        if not (0.0 < self.height_fraction <= 1.0):
+            raise DeckParameterError(
+                "lifeline_height_fraction",
+                self.height_fraction,
+                "(0, 1]",
+            )
+
+
+@dataclass(frozen=True)
+class AnchorLockerParameters:
+    """Anchor locker (raised foredeck hatch box) parameters (data-model §1.4).
+
+    A raised additive box near the bow (NOT a boolean recess). Footprint is
+    validated against the deck plate + cabin trunk by :func:`build_deck`.
+
+    Example:
+        >>> p = AnchorLockerParameters()
+        >>> p.length, p.width, p.height
+        (500.0, 400.0, 150.0)
+    """
+
+    length: float = 500.0
+    width: float = 400.0
+    height: float = 150.0
+    center_x: float = 8500.0  # foredeck, forward of the cabin trunk (bow = XMax)
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("anchor_locker_length", self.length),
+            ("anchor_locker_width", self.width),
+            ("anchor_locker_height", self.height),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        if self.center_x < 0:
+            raise DeckParameterError("anchor_locker_center_x", self.center_x, ">= 0")
+
+
+@dataclass(frozen=True)
+class CleatParameters:
+    """Mooring cleat parameters (data-model §1.5).
+
+    Per-side semantics: ``count_per_station`` cleats are placed per side at
+    each of ``station_count`` longitudinal stations, mirrored port/starboard.
+    Total cleats = ``count_per_station * station_count * 2`` (default 4).
+
+    Example:
+        >>> p = CleatParameters()
+        >>> p.count_per_station, p.station_count
+        (1, 2)
+        >>> p.count_per_station * p.station_count * 2  # total cleats
+        4
+    """
+
+    count_per_station: int = 1
+    station_count: int = 2
+    length: float = 200.0
+    height: float = 80.0
+
+    def __post_init__(self) -> None:
+        if self.count_per_station < 0:
+            raise DeckParameterError("cleat_count_per_station", self.count_per_station, ">= 0")
+        if self.station_count < 0:
+            raise DeckParameterError("cleat_station_count", self.station_count, ">= 0")
+        for name, value in (
+            ("cleat_length", self.length),
+            ("cleat_height", self.height),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+
+
+@dataclass(frozen=True)
+class DeckHardwareParameters:
+    """Composite of the five deck-hardware parameter dataclasses (data-model §1.6).
+
+    The optional ``parameters_hardware`` entry point for :func:`build_deck`,
+    orthogonal to :class:`DeckSuperstructureParameters`. No composite-level
+    cross-field invariants — the hardware items are mutually independent at
+    the parameter layer; cross-deck collision checks live in build_deck.
+
+    Example:
+        >>> p = DeckHardwareParameters()
+        >>> p.rubrail.height, p.cleats.station_count, p.lifelines.line_count
+        (60.0, 2, 1)
+    """
+
+    rubrail: RubrailParameters = field(default_factory=RubrailParameters)
+    bow_pulpit: BowPulpitParameters = field(default_factory=BowPulpitParameters)
+    lifelines: LifelineParameters = field(default_factory=LifelineParameters)
+    anchor_locker: AnchorLockerParameters = field(default_factory=AnchorLockerParameters)
+    cleats: CleatParameters = field(default_factory=CleatParameters)
+
+
+# ---------------------------------------------------------------------------
 # Sub-Body wrappers (data-model §2)
 # ---------------------------------------------------------------------------
 
@@ -773,6 +973,79 @@ class Railings:
 
 
 # ---------------------------------------------------------------------------
+# Spec 010 — deck-hardware sub-Body wrappers (data-model §2)
+# All length fields are in METERS at the wrapper boundary (matching the
+# spec 003/008 wrappers); the FreeCAD geometry is built in mm.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Rubrail:
+    """Wrapper around the Part::Compound of the port + starboard rubrail bodies.
+
+    Example:
+        >>> # Accessed via Deck.rubrail.
+    """
+
+    body: Any
+    height: float
+    thickness: float
+
+
+@dataclass(frozen=True)
+class BowPulpit:
+    """Wrapper around the FreeCAD Body representing the tubular bow pulpit.
+
+    Example:
+        >>> # Accessed via Deck.bow_pulpit.
+    """
+
+    body: Any
+    tube_diameter: float
+    height: float
+
+
+@dataclass(frozen=True)
+class Lifelines:
+    """Wrapper around the Part::Compound of the lifeline tubes.
+
+    ``body`` is an empty compound when the railing has zero posts (FR-017).
+
+    Example:
+        >>> # Accessed via Deck.lifelines.
+    """
+
+    body: Any
+    line_count: int
+
+
+@dataclass(frozen=True)
+class AnchorLocker:
+    """Wrapper around the FreeCAD Body representing the raised anchor-locker box.
+
+    Example:
+        >>> # Accessed via Deck.anchor_locker.
+    """
+
+    body: Any
+    length: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class Cleats:
+    """Wrapper around the Part::Compound of the mooring cleat bodies.
+
+    Example:
+        >>> # Accessed via Deck.cleats.
+    """
+
+    body: Any
+    count: int
+
+
+# ---------------------------------------------------------------------------
 # Return aggregate (data-model §3)
 # ---------------------------------------------------------------------------
 
@@ -798,6 +1071,15 @@ class Deck:
     hardtop: Hardtop
     hardtop_pillars: HardtopPillars
     railings: Railings
+    # Spec 010 — deck hardware (appended after the six superstructure bodies
+    # so existing field order is preserved; Deck is only constructed inside
+    # build_deck, so adding fields is non-breaking for external callers).
+    rubrail: Rubrail
+    bow_pulpit: BowPulpit
+    lifelines: Lifelines
+    anchor_locker: AnchorLocker
+    cleats: Cleats
+    parameters_hardware: DeckHardwareParameters
 
 
 # ---------------------------------------------------------------------------
@@ -1073,9 +1355,7 @@ def _pd_close_loop_constraints(sketch: Any, line_ids: list[int]) -> None:
     n = len(line_ids)
     for i in range(n):
         j = (i + 1) % n
-        sketch.addConstraint(
-            Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1)
-        )
+        sketch.addConstraint(Sketcher.Constraint("Coincident", line_ids[i], 2, line_ids[j], 1))
 
 
 def _build_cabin_trunk(
@@ -1138,9 +1418,7 @@ def _build_cabin_trunk(
         _pd_close_loop_constraints(sketch, line_ids)
         return sketch
 
-    lower_sketch = _trapezoid_sketch(
-        "CabinTrunkLowerSketch", lower_datum, fwd_x_mm, aft_x_mm
-    )
+    lower_sketch = _trapezoid_sketch("CabinTrunkLowerSketch", lower_datum, fwd_x_mm, aft_x_mm)
     upper_sketch = _trapezoid_sketch(
         "CabinTrunkUpperSketch",
         upper_datum,
@@ -1224,9 +1502,7 @@ def _build_windshield(
     added.append(body)
     target_doc.recompute()
 
-    def _make_yz_datum(
-        name: str, x_offset_mm: float, z_offset_mm: float
-    ) -> Any:
+    def _make_yz_datum(name: str, x_offset_mm: float, z_offset_mm: float) -> Any:
         yz_plane = _pd_get_origin_plane(body, "YZ_Plane")
         datum = body.newObject("PartDesign::Plane", name)
         added.append(datum)
@@ -1359,9 +1635,7 @@ def _build_hardtop(
         )
         return datum
 
-    def _rect_sketch(
-        name: str, datum: Any, half_width_mm: float, base_z_local: float
-    ) -> Any:
+    def _rect_sketch(name: str, datum: Any, half_width_mm: float, base_z_local: float) -> Any:
         """Rectangle of half_width * thickness, centered at (0, base_z_local) in sketch frame."""
         sketch = body.newObject("Sketcher::SketchObject", name)
         added.append(sketch)
@@ -1400,12 +1674,8 @@ def _build_hardtop(
     fwd_sketch = _rect_sketch(
         "HardtopForwardSketch", fwd_datum, ht.forward_width / 2.0, -curl_drop_mm
     )
-    mid_sketch = _rect_sketch(
-        "HardtopMidSketch", mid_datum, mid_width / 2.0, 0.0
-    )
-    aft_sketch = _rect_sketch(
-        "HardtopAftSketch", aft_datum, ht.aft_width / 2.0, 0.0
-    )
+    mid_sketch = _rect_sketch("HardtopMidSketch", mid_datum, mid_width / 2.0, 0.0)
+    aft_sketch = _rect_sketch("HardtopAftSketch", aft_datum, ht.aft_width / 2.0, 0.0)
     target_doc.recompute()
 
     loft = body.newObject("PartDesign::AdditiveLoft", "HardtopLoft")
@@ -1506,25 +1776,17 @@ def _build_hardtop_pillars(
 
             for side, sign in (("Port", 1), ("Starboard", -1)):
                 idx = x_stations.index(x_mm) + 1
-                body = target_doc.addObject(
-                    "PartDesign::Body", f"Deck_Pillar_{side}_{idx}"
-                )
+                body = target_doc.addObject("PartDesign::Body", f"Deck_Pillar_{side}_{idx}")
                 added.append(body)
                 target_doc.recompute()
 
-                datum = _pd_make_datum_xy(
-                    body, f"Pillar{side}{idx}Datum", deck_z_mm, added
-                )
-                sketch = body.newObject(
-                    "Sketcher::SketchObject", f"Pillar{side}{idx}Sketch"
-                )
+                datum = _pd_make_datum_xy(body, f"Pillar{side}{idx}Datum", deck_z_mm, added)
+                sketch = body.newObject("Sketcher::SketchObject", f"Pillar{side}{idx}Sketch")
                 added.append(sketch)
                 sketch.AttachmentSupport = [(datum, "")]
                 sketch.MapMode = "FlatFace"
                 center = FreeCAD.Vector(x_mm, sign * pillar_y_mm, 0)
-                circle = Part.Circle(
-                    center, FreeCAD.Vector(0, 0, 1), pp.diameter / 2.0
-                )
+                circle = Part.Circle(center, FreeCAD.Vector(0, 0, 1), pp.diameter / 2.0)
                 sketch.addGeometry(circle.toShape().Curve, False)
                 target_doc.recompute()
 
@@ -1545,8 +1807,8 @@ def _build_hardtop_pillars(
     else:
         # Zero-pillar fallback: empty compound. Use a tiny degenerate vertex
         # so the Shape is not Null (which would fail downstream tests).
-        compound_obj.Shape = Part.Vertex(FreeCAD.Vector(0, 0, 0)).toShape() if False else (
-            Part.makeCompound([])
+        compound_obj.Shape = (
+            Part.Vertex(FreeCAD.Vector(0, 0, 0)).toShape() if False else (Part.makeCompound([]))
         )
     added.append(compound_obj)
     compound_obj.addProperty(
@@ -1606,11 +1868,7 @@ def _build_railings(
     deck_shape = deck_plate.body.Shape
     mid_x_mm = (rp.forward_x + rp.aft_x) / 2.0
     verts_at_mid = [v for v in deck_shape.Vertexes if abs(v.X - mid_x_mm) < 1500.0]
-    outer_y_mm = (
-        max(abs(v.Y) for v in verts_at_mid)
-        if verts_at_mid
-        else deck_shape.BoundBox.YMax
-    )
+    outer_y_mm = max(abs(v.Y) for v in verts_at_mid) if verts_at_mid else deck_shape.BoundBox.YMax
     rail_y_mm = max(0.0, outer_y_mm - rp.inboard_offset_from_sheer)
 
     side_bodies: list[Any] = []
@@ -1660,16 +1918,12 @@ def _build_railings(
                 post_xs = [(rp.forward_x + rp.aft_x) / 2.0]
             else:
                 step = (rp.aft_x - rp.forward_x) / (rp.post_count_per_side - 1)
-                post_xs = [
-                    rp.forward_x + i * step for i in range(rp.post_count_per_side)
-                ]
+                post_xs = [rp.forward_x + i * step for i in range(rp.post_count_per_side)]
             for idx, px_mm in enumerate(post_xs, start=1):
                 post_datum = _pd_make_datum_xy(
                     body, f"Rail{side}Post{idx}Datum", deck_top_z_mm, added
                 )
-                post_sketch = body.newObject(
-                    "Sketcher::SketchObject", f"Rail{side}Post{idx}Sketch"
-                )
+                post_sketch = body.newObject("Sketcher::SketchObject", f"Rail{side}Post{idx}Sketch")
                 added.append(post_sketch)
                 post_sketch.AttachmentSupport = [(post_datum, "")]
                 post_sketch.MapMode = "FlatFace"
@@ -1681,9 +1935,7 @@ def _build_railings(
                 post_sketch.addGeometry(post_circle.toShape().Curve, False)
                 target_doc.recompute()
 
-                post_pad = body.newObject(
-                    "PartDesign::Pad", f"Rail{side}Post{idx}Pad"
-                )
+                post_pad = body.newObject("PartDesign::Pad", f"Rail{side}Post{idx}Pad")
                 added.append(post_pad)
                 post_pad.Profile = (post_sketch, [""])
                 post_pad.Length = rp.height_above_deck
@@ -1713,6 +1965,562 @@ def _build_railings(
 
 
 # ---------------------------------------------------------------------------
+# Spec 010 — deck-hardware helpers + sub-Body builders (data-model §2, §5)
+#
+# Every hardware item is a PartDesign::Body (or a Part::Compound of bodies),
+# seated on the ACTUAL sampled hull/deck geometry via _sample_hull_sheer +
+# _resolve_deck_top_z_at (FR-004), mirroring the spec 008 superstructure
+# builders. All shapes are deterministic functions of (hull, deck, params).
+# ---------------------------------------------------------------------------
+
+
+def _sheer_samples_mm(hull: Hull) -> list[tuple[float, float, float]]:
+    """The five sheer-line samples in mm (port half, positive Y), ascending X."""
+    return [(x * _MM_PER_M, y * _MM_PER_M, z * _MM_PER_M) for x, y, z in _sample_hull_sheer(hull)]
+
+
+def _interp_outer_y_at(samples_mm: list[tuple[float, float, float]], x_mm: float) -> float:
+    """Linearly interpolate the sheer half-beam (outer Y, mm) at longitudinal X."""
+    pts = sorted(samples_mm, key=lambda p: p[0])
+    if x_mm <= pts[0][0]:
+        return pts[0][1]
+    if x_mm >= pts[-1][0]:
+        return pts[-1][1]
+    for i in range(len(pts) - 1):
+        x1, y1, _ = pts[i]
+        x2, y2, _ = pts[i + 1]
+        if x1 <= x_mm <= x2:
+            if x2 == x1:
+                return (y1 + y2) / 2.0
+            t = (x_mm - x1) / (x2 - x1)
+            return y1 + t * (y2 - y1)
+    return pts[-1][1]
+
+
+def _pd_make_datum_yz(body: Any, name: str, x_mm: float, z_mm: float, added: list[Any]) -> Any:
+    """PartDesign datum parallel to YZ at global (x_mm, 0, z_mm).
+
+    YZ_Plane local frame: local X = global Y, local Y = global Z, local Z =
+    global X (normal). So the local AttachmentOffset vector is (0, z_mm, x_mm).
+    """
+    import FreeCAD
+
+    yz_plane = _pd_get_origin_plane(body, "YZ_Plane")
+    datum = body.newObject("PartDesign::Plane", name)
+    added.append(datum)
+    datum.AttachmentSupport = [(yz_plane, "")]
+    datum.MapMode = "FlatFace"
+    datum.AttachmentOffset = FreeCAD.Placement(FreeCAD.Vector(0.0, z_mm, x_mm), FreeCAD.Rotation())
+    return datum
+
+
+def _pd_make_datum_xz(
+    body: Any, name: str, x_mm: float, y_mm: float, z_mm: float, added: list[Any]
+) -> Any:
+    """PartDesign datum parallel to XZ at global (x_mm, y_mm, z_mm).
+
+    XZ_Plane local frame: local X = global X, local Y = global Z, local Z =
+    global Y (normal). So the local AttachmentOffset vector is (x_mm, z_mm, y_mm).
+    Padding a sketch on this datum extrudes along +global Y (transverse).
+    """
+    import FreeCAD
+
+    xz_plane = _pd_get_origin_plane(body, "XZ_Plane")
+    datum = body.newObject("PartDesign::Plane", name)
+    added.append(datum)
+    datum.AttachmentSupport = [(xz_plane, "")]
+    datum.MapMode = "FlatFace"
+    datum.AttachmentOffset = FreeCAD.Placement(FreeCAD.Vector(x_mm, z_mm, y_mm), FreeCAD.Rotation())
+    return datum
+
+
+def _pd_circle_pad(
+    body: Any,
+    datum: Any,
+    name: str,
+    center_u: float,
+    center_v: float,
+    radius: float,
+    length: float,
+    added: list[Any],
+) -> Any:
+    """Add a circular sketch on a datum + a Pad of given length (a tube/cylinder)."""
+    import FreeCAD
+    import Part
+
+    sketch = body.newObject("Sketcher::SketchObject", f"{name}Sketch")
+    added.append(sketch)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
+    circle = Part.Circle(FreeCAD.Vector(center_u, center_v, 0), FreeCAD.Vector(0, 0, 1), radius)
+    sketch.addGeometry(circle.toShape().Curve, False)
+    pad = body.newObject("PartDesign::Pad", f"{name}Pad")
+    added.append(pad)
+    pad.Profile = (sketch, [""])
+    pad.Length = length
+    pad.Midplane = False
+    pad.Reversed = False
+    return pad
+
+
+def _validate_cross_deck_hardware(
+    deck_plate: DeckPlate,
+    cabin_trunk: CabinTrunk,
+    hardware: DeckHardwareParameters,
+) -> None:
+    """Cross-deck hardware collision checks (FR-018, data-model §6).
+
+    Runs after the deck plate + cabin trunk exist (their extents are needed),
+    but before any hardware body is built. Raises :class:`DeckParameterError`
+    so build_deck's rollback restores the pre-call document state.
+
+    Coordinate convention (from the hull module): the transom (stern) is at
+    X = XMin and the stem (bow) is at X = XMax, so the foredeck — and anything
+    "forward of the cabin trunk" — is the high-X region beyond the cabin's
+    bow-facing (XMax) edge.
+    """
+    deck_bb = deck_plate.body.Shape.BoundBox
+    cabin_bb = cabin_trunk.body.Shape.BoundBox
+
+    rb = hardware.rubrail
+    if rb.forward_x < deck_bb.XMin - 1.0 or rb.aft_x > deck_bb.XMax + 1.0:
+        raise DeckParameterError(
+            "rubrail_extent<>deck_extent",
+            None,
+            f"rubrail [forward_x, aft_x] must lie within the deck X-extent "
+            f"[{deck_bb.XMin:.0f}, {deck_bb.XMax:.0f}] mm",
+        )
+
+    al = hardware.anchor_locker
+    locker_aft = al.center_x - al.length / 2.0  # stern-facing edge (lower X)
+    locker_fwd = al.center_x + al.length / 2.0  # bow-facing edge (higher X)
+    if locker_aft < cabin_bb.XMax:
+        raise DeckParameterError(
+            "anchor_locker_center_x<>cabin_trunk",
+            al.center_x,
+            f"anchor locker must sit forward of the cabin trunk "
+            f"(stern edge {locker_aft:.0f} mm must be >= cabin bow edge "
+            f"{cabin_bb.XMax:.0f} mm)",
+        )
+    if locker_fwd > deck_bb.XMax:
+        raise DeckParameterError(
+            "anchor_locker_center_x<>deck_forward_edge",
+            al.center_x,
+            f"anchor locker must fit within the deck (bow edge {locker_fwd:.0f} mm "
+            f"must be <= deck bow edge {deck_bb.XMax:.0f} mm)",
+        )
+
+
+def _build_rubrail(
+    hull: Hull,
+    deck_plate: DeckPlate,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    hardware: DeckHardwareParameters,
+) -> Rubrail:
+    """Build the rubrail as a Part::Compound of port + starboard PartDesign Bodies.
+
+    Each side is an AdditiveLoft (Ruled=True) between rectangular cross-section
+    sketches placed on YZ-parallel datums at stations spanning
+    ``[forward_x, aft_x]``, centered on the sampled sheer (outer Y, top Z).
+    Implements spec 008's deferred ``SuperstructureBundle.rubrail`` (FR-005).
+    """
+    import FreeCAD
+    import Part
+
+    rp = hardware.rubrail
+    samples = _sheer_samples_mm(hull)
+
+    # Stations: the forward/aft bounds plus every sampled station strictly
+    # between them, ascending — so the loft follows the sheer curvature.
+    inner = [p[0] for p in samples if rp.forward_x < p[0] < rp.aft_x]
+    stations = [rp.forward_x, *sorted(inner), rp.aft_x]
+
+    half_h = rp.height / 2.0
+    half_t = rp.thickness / 2.0
+
+    side_bodies: list[Any] = []
+    for side, sign in (("Port", 1), ("Starboard", -1)):
+        body = target_doc.addObject("PartDesign::Body", f"Deck_Rubrail_{side}")
+        added.append(body)
+        target_doc.recompute()
+
+        section_sketches: list[Any] = []
+        for idx, x_mm in enumerate(stations):
+            outer_y = _interp_outer_y_at(samples, x_mm)
+            top_z = _resolve_deck_top_z_at(deck_plate, x_mm)
+            y_center = sign * outer_y
+            datum = _pd_make_datum_yz(body, f"Rubrail{side}Datum{idx}", x_mm, 0.0, added)
+            sketch = body.newObject("Sketcher::SketchObject", f"Rubrail{side}Sketch{idx}")
+            added.append(sketch)
+            sketch.AttachmentSupport = [(datum, "")]
+            sketch.MapMode = "FlatFace"
+            # Sketch local x = global Y, local y = global Z.
+            pts = [
+                FreeCAD.Vector(y_center - half_t, top_z - half_h, 0),
+                FreeCAD.Vector(y_center + half_t, top_z - half_h, 0),
+                FreeCAD.Vector(y_center + half_t, top_z + half_h, 0),
+                FreeCAD.Vector(y_center - half_t, top_z + half_h, 0),
+            ]
+            line_ids: list[int] = []
+            for i in range(4):
+                j = (i + 1) % 4
+                line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+            _pd_close_loop_constraints(sketch, line_ids)
+            section_sketches.append(sketch)
+        target_doc.recompute()
+
+        loft = body.newObject("PartDesign::AdditiveLoft", f"Rubrail{side}Loft")
+        added.append(loft)
+        loft.Profile = (section_sketches[0], [""])
+        loft.Sections = [(s, [""]) for s in section_sketches[1:]]
+        loft.Ruled = True  # spec 009: Ruled=False overshoots on this profile
+        loft.Closed = False
+        target_doc.recompute()
+        side_bodies.append(body)
+
+    compound = target_doc.addObject("Part::Feature", "Deck_Rubrail")
+    compound.Shape = Part.makeCompound([b.Shape for b in side_bodies])
+    added.append(compound)
+    compound.addProperty("App::PropertyLength", "RubrailHeight", "Deck", "Rubrail height")
+    compound.RubrailHeight = rp.height
+    compound.addProperty(
+        "App::PropertyStringList", "SideBodyLabels", "Deck", "Port + starboard rubrail bodies"
+    )
+    compound.SideBodyLabels = [b.Label for b in side_bodies]
+
+    return Rubrail(
+        body=compound,
+        height=rp.height / _MM_PER_M,
+        thickness=rp.thickness / _MM_PER_M,
+    )
+
+
+def _build_bow_pulpit(
+    hull: Hull,
+    deck_plate: DeckPlate,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    hardware: DeckHardwareParameters,
+) -> BowPulpit:
+    """Build the bow pulpit as a single tubular PartDesign::Body (FR-006).
+
+    Per side: a vertical stanchion (cylinder padded +Z from the deck top) plus
+    a fore-aft top-rail tube (cylinder padded +X) at the stanchion-top height.
+    A transverse tube (padded +Y) joins the two forward ends across the bow.
+    Symmetric about the centerline. Zero-stanchion fallback yields an empty
+    body footprint (FR-016).
+    """
+    bp = hardware.bow_pulpit
+    samples = _sheer_samples_mm(hull)
+    radius = bp.tube_diameter / 2.0
+
+    # Stanchion seat: near the bow (XMax = stem) but set back so the deck
+    # still has beam. The very stem sample has outer_y = 0 (collapses to a
+    # vertex), so seating exactly there would give a zero-width pulpit;
+    # 90% of the deck X range keeps a non-degenerate base.
+    deck_bb = deck_plate.body.Shape.BoundBox
+    x_range = deck_bb.XMax - deck_bb.XMin
+    stanchion_x = deck_bb.XMin + 0.90 * x_range
+    deck_top_z = _resolve_deck_top_z_at(deck_plate, stanchion_x)
+    outer_y = max(_interp_outer_y_at(samples, stanchion_x), 50.0)
+    rail_z = deck_top_z + bp.height
+    fwd_x = stanchion_x + bp.forward_extent
+
+    body = target_doc.addObject("PartDesign::Body", "Deck_BowPulpit")
+    added.append(body)
+    target_doc.recompute()
+
+    # Number of stanchions split across sides (default 2 → one per side).
+    per_side = max(bp.stanchion_count // 2, 1 if bp.stanchion_count > 0 else 0)
+    if per_side > 0:
+        for side, sign in (("Port", 1), ("Starboard", -1)):
+            y = sign * outer_y
+            # Vertical stanchion: XY datum at deck top, circle padded +Z.
+            v_datum = _pd_make_datum_xy(body, f"Pulpit{side}StanchionDatum", deck_top_z, added)
+            _pd_circle_pad(
+                body, v_datum, f"Pulpit{side}Stanchion", stanchion_x, y, radius, bp.height, added
+            )
+            target_doc.recompute()
+            # Fore-aft top rail: YZ datum at (stanchion_x, rail_z), circle padded +X.
+            if bp.forward_extent > 0:
+                r_datum = _pd_make_datum_yz(
+                    body, f"Pulpit{side}RailDatum", stanchion_x, rail_z, added
+                )
+                _pd_circle_pad(
+                    body, r_datum, f"Pulpit{side}Rail", y, 0.0, radius, bp.forward_extent, added
+                )
+                target_doc.recompute()
+        # Transverse tube across the bow forward ends (padded +Y from starboard to port).
+        t_datum = _pd_make_datum_xz(body, "PulpitCrossDatum", fwd_x, -outer_y, rail_z, added)
+        _pd_circle_pad(body, t_datum, "PulpitCross", 0.0, 0.0, radius, 2.0 * outer_y, added)
+        target_doc.recompute()
+
+    body.addProperty("App::PropertyLength", "TubeDiameter", "Deck", "Bow pulpit tube diameter")
+    body.TubeDiameter = bp.tube_diameter
+    return BowPulpit(
+        body=body,
+        tube_diameter=bp.tube_diameter / _MM_PER_M,
+        height=bp.height / _MM_PER_M,
+    )
+
+
+def _build_anchor_locker(
+    deck_plate: DeckPlate,
+    cabin_trunk: CabinTrunk,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    hardware: DeckHardwareParameters,
+) -> AnchorLocker:
+    """Build the anchor locker as a raised box PartDesign::Body (FR-008).
+
+    A rectangular sketch (length x width) on an XY-parallel datum at the
+    foredeck top Z near the bow, padded up by ``height``. NOT a boolean
+    recess (deferred). Placement validated by build_deck before this runs.
+    """
+    import FreeCAD
+    import Part
+
+    al = hardware.anchor_locker
+    deck_top_z = _resolve_deck_top_z_at(deck_plate, al.center_x)
+    fwd_x = al.center_x - al.length / 2.0
+    aft_x = al.center_x + al.length / 2.0
+    half_w = al.width / 2.0
+
+    body = target_doc.addObject("PartDesign::Body", "Deck_AnchorLocker")
+    added.append(body)
+    target_doc.recompute()
+
+    datum = _pd_make_datum_xy(body, "AnchorLockerDatum", deck_top_z, added)
+    sketch = body.newObject("Sketcher::SketchObject", "AnchorLockerSketch")
+    added.append(sketch)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
+    # XY datum: sketch local x = global X, local y = global Y.
+    pts = [
+        FreeCAD.Vector(fwd_x, -half_w, 0),
+        FreeCAD.Vector(aft_x, -half_w, 0),
+        FreeCAD.Vector(aft_x, half_w, 0),
+        FreeCAD.Vector(fwd_x, half_w, 0),
+    ]
+    line_ids: list[int] = []
+    for i in range(4):
+        j = (i + 1) % 4
+        line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+    _pd_close_loop_constraints(sketch, line_ids)
+    target_doc.recompute()
+
+    pad = body.newObject("PartDesign::Pad", "AnchorLockerPad")
+    added.append(pad)
+    pad.Profile = (sketch, [""])
+    pad.Length = al.height
+    pad.Midplane = False
+    pad.Reversed = False
+    target_doc.recompute()
+
+    body.addProperty("App::PropertyLength", "LockerLength", "Deck", "Anchor locker length")
+    body.LockerLength = al.length
+    return AnchorLocker(
+        body=body,
+        length=al.length / _MM_PER_M,
+        width=al.width / _MM_PER_M,
+        height=al.height / _MM_PER_M,
+    )
+
+
+def _build_cleats(
+    hull: Hull,
+    deck_plate: DeckPlate,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    hardware: DeckHardwareParameters,
+) -> Cleats:
+    """Build mooring cleats as a Part::Compound of PartDesign Bodies (FR-009).
+
+    ``count_per_station`` cleats per side at each of ``station_count`` stations
+    (per-side semantics), mirrored port/starboard, each seated on the actual
+    deck top. Each cleat = a base block Pad + a horizontal horn-bar tube.
+    Zero-count fallback yields an empty compound (FR-016).
+    """
+    import FreeCAD
+    import Part
+
+    cp = hardware.cleats
+    samples = _sheer_samples_mm(hull)
+    deck_bb = deck_plate.body.Shape.BoundBox
+    loa_mm = deck_bb.XMax - deck_bb.XMin
+
+    cleat_bodies: list[Any] = []
+    if cp.count_per_station > 0 and cp.station_count > 0:
+        # Stations spread across [0.12, 0.88] of the deck X range.
+        if cp.station_count == 1:
+            fractions = [0.5]
+        else:
+            lo, hi = 0.12, 0.88
+            step = (hi - lo) / (cp.station_count - 1)
+            fractions = [lo + i * step for i in range(cp.station_count)]
+        station_xs = [deck_bb.XMin + f * loa_mm for f in fractions]
+
+        inboard = cp.length  # nudge cleats inboard from the sheer by ~one length
+        half_w = cp.length * 0.18
+        horn_radius = cp.height * 0.18
+
+        seq = 0
+        for x_mm in station_xs:
+            outer_y = _interp_outer_y_at(samples, x_mm)
+            deck_top_z = _resolve_deck_top_z_at(deck_plate, x_mm)
+            for side, sign in (("Port", 1), ("Starboard", -1)):
+                for k in range(cp.count_per_station):
+                    seq += 1
+                    # Multiple per-side cleats at a station nudge slightly aft.
+                    cx = x_mm + k * (cp.length * 1.5)
+                    cy = sign * max(0.0, outer_y - inboard)
+                    body = target_doc.addObject("PartDesign::Body", f"Deck_Cleat_{side}_{seq}")
+                    added.append(body)
+                    target_doc.recompute()
+
+                    # Base block: rectangle (length x 2*half_w) padded up.
+                    base_datum = _pd_make_datum_xy(
+                        body, f"Cleat{side}{seq}BaseDatum", deck_top_z, added
+                    )
+                    base_sketch = body.newObject(
+                        "Sketcher::SketchObject", f"Cleat{side}{seq}BaseSketch"
+                    )
+                    added.append(base_sketch)
+                    base_sketch.AttachmentSupport = [(base_datum, "")]
+                    base_sketch.MapMode = "FlatFace"
+                    hl = cp.length / 2.0
+                    pts = [
+                        FreeCAD.Vector(cx - hl, cy - half_w, 0),
+                        FreeCAD.Vector(cx + hl, cy - half_w, 0),
+                        FreeCAD.Vector(cx + hl, cy + half_w, 0),
+                        FreeCAD.Vector(cx - hl, cy + half_w, 0),
+                    ]
+                    line_ids: list[int] = []
+                    for i in range(4):
+                        j = (i + 1) % 4
+                        line_ids.append(
+                            base_sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False)
+                        )
+                    _pd_close_loop_constraints(base_sketch, line_ids)
+                    target_doc.recompute()
+                    base_pad = body.newObject("PartDesign::Pad", f"Cleat{side}{seq}BasePad")
+                    added.append(base_pad)
+                    base_pad.Profile = (base_sketch, [""])
+                    base_pad.Length = cp.height * 0.5
+                    base_pad.Midplane = False
+                    base_pad.Reversed = False
+                    target_doc.recompute()
+
+                    # Horn bar: a fore-aft tube on top of the base (YZ datum, +X).
+                    horn_z = deck_top_z + cp.height * 0.7
+                    horn_datum = _pd_make_datum_yz(
+                        body, f"Cleat{side}{seq}HornDatum", cx - hl, horn_z, added
+                    )
+                    _pd_circle_pad(
+                        body,
+                        horn_datum,
+                        f"Cleat{side}{seq}Horn",
+                        cy,
+                        0.0,
+                        horn_radius,
+                        cp.length,
+                        added,
+                    )
+                    target_doc.recompute()
+                    cleat_bodies.append(body)
+
+    compound = target_doc.addObject("Part::Feature", "Deck_Cleats")
+    compound.Shape = (
+        Part.makeCompound([b.Shape for b in cleat_bodies])
+        if cleat_bodies
+        else Part.makeCompound([])
+    )
+    added.append(compound)
+    compound.addProperty("App::PropertyInteger", "CleatCount", "Deck", "Total cleat count")
+    compound.CleatCount = len(cleat_bodies)
+    compound.addProperty(
+        "App::PropertyStringList", "CleatBodyLabels", "Deck", "Constituent cleat bodies"
+    )
+    compound.CleatBodyLabels = [b.Label for b in cleat_bodies]
+    return Cleats(body=compound, count=len(cleat_bodies))
+
+
+def _build_lifelines(
+    deck_plate: DeckPlate,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    hardware: DeckHardwareParameters,
+    superstructure: DeckSuperstructureParameters,
+) -> Lifelines:
+    """Build lifelines as a Part::Compound of horizontal tubes (FR-007, FR-017).
+
+    One tube per side per line, strung between the railing posts at
+    ``railing.height_above_deck * height_fraction``. Skipped entirely (empty
+    compound) when the railing has zero posts.
+    """
+    import Part
+
+    ll = hardware.lifelines
+    rail = superstructure.railings
+    deck_top_z = _resolve_deck_top_z_at(deck_plate, (rail.forward_x + rail.aft_x) / 2.0)
+
+    line_bodies: list[Any] = []
+    if ll.line_count > 0 and rail.post_count_per_side > 0:
+        # Lateral Y matches the railing posts (sheer outer minus inboard offset).
+        deck_shape = deck_plate.body.Shape
+        mid_x = (rail.forward_x + rail.aft_x) / 2.0
+        verts_at_mid = [v for v in deck_shape.Vertexes if abs(v.X - mid_x) < 1500.0]
+        outer_y = max(abs(v.Y) for v in verts_at_mid) if verts_at_mid else deck_shape.BoundBox.YMax
+        rail_y = max(0.0, outer_y - rail.inboard_offset_from_sheer)
+        radius = ll.tube_diameter / 2.0
+        span = rail.aft_x - rail.forward_x
+
+        for line_idx in range(ll.line_count):
+            # Distribute multiple lines evenly below the railing top.
+            if ll.line_count == 1:
+                frac = ll.height_fraction
+            else:
+                frac = ll.height_fraction * (line_idx + 1) / ll.line_count
+            line_z = deck_top_z + rail.height_above_deck * frac
+            for side, sign in (("Port", 1), ("Starboard", -1)):
+                body = target_doc.addObject(
+                    "PartDesign::Body", f"Deck_Lifeline_{side}_{line_idx + 1}"
+                )
+                added.append(body)
+                target_doc.recompute()
+                datum = _pd_make_datum_yz(
+                    body, f"Lifeline{side}{line_idx + 1}Datum", rail.forward_x, line_z, added
+                )
+                _pd_circle_pad(
+                    body,
+                    datum,
+                    f"Lifeline{side}{line_idx + 1}",
+                    sign * rail_y,
+                    0.0,
+                    radius,
+                    span,
+                    added,
+                )
+                target_doc.recompute()
+                line_bodies.append(body)
+
+    compound = target_doc.addObject("Part::Feature", "Deck_Lifelines")
+    compound.Shape = (
+        Part.makeCompound([b.Shape for b in line_bodies]) if line_bodies else Part.makeCompound([])
+    )
+    added.append(compound)
+    compound.addProperty("App::PropertyInteger", "LineCount", "Deck", "Lifeline count")
+    compound.LineCount = len(line_bodies)
+    return Lifelines(body=compound, line_count=len(line_bodies))
+
+
+# ---------------------------------------------------------------------------
 # Public builder (FR-001 + contracts/python-api.md)
 # ---------------------------------------------------------------------------
 
@@ -1722,10 +2530,11 @@ def build_deck(
     parameters: DeckParameters | None = None,
     *,
     parameters_superstructure: DeckSuperstructureParameters | None = None,
+    parameters_hardware: DeckHardwareParameters | None = None,
     document: Any = None,
     name: str = "Deck",
 ) -> Deck:
-    """Build the six-Body parametric Storebro deck on a hull.
+    """Build the parametric Storebro deck (superstructure + hardware) on a hull.
 
     Args:
         hull: A Hull returned by ``storebro.hull.build_hull``. Must have a
@@ -1738,16 +2547,24 @@ def build_deck(
             non-None, takes precedence over ``parameters`` for the
             superstructure shape; the deck plate still derives from the
             legacy fields. Mutually exclusive with ``parameters``.
+        parameters_hardware: Spec 010 deck-hardware composite (rubrail, bow
+            pulpit, lifelines, anchor locker, cleats). ``None`` → use
+            :class:`DeckHardwareParameters` defaults, so existing callers get
+            the hardware automatically. Independent of the ``parameters`` ⊕
+            ``parameters_superstructure`` mutual-exclusivity rule.
         document: Target FreeCAD document. ``None`` → use ``hull.document``.
             Must equal ``hull.document`` if non-None — cross-document deck
             building is rejected with :class:`DeckParameterError`.
         name: Base label for the Deck aggregate. Defaults to ``"Deck"``. The
-            six sub-Bodies are labeled ``Deck_DeckPlate``, ``Deck_CabinTrunk``,
-            ``Deck_Windshield``, ``Deck_Hardtop``, ``Deck_HardtopPillars``,
-            ``Deck_Railings``. FreeCAD auto-numbering applies on collision.
+            six superstructure sub-Bodies are labeled ``Deck_DeckPlate``,
+            ``Deck_CabinTrunk``, ``Deck_Windshield``, ``Deck_Hardtop``,
+            ``Deck_HardtopPillars``, ``Deck_Railings``; the five hardware items
+            are ``Deck_Rubrail``, ``Deck_BowPulpit``, ``Deck_Lifelines``,
+            ``Deck_AnchorLocker``, ``Deck_Cleats``. FreeCAD auto-numbering
+            applies on collision.
 
     Returns:
-        :class:`Deck` aggregate holding the six sub-Body wrappers + inputs.
+        :class:`Deck` aggregate holding all sub-Body wrappers + inputs.
 
     Raises:
         DeckParameterError: Invalid parameters, hull-incompatibility,
@@ -1786,6 +2603,9 @@ def build_deck(
         else resolved_params.to_superstructure_parameters()
     )
 
+    # Resolve the spec 010 hardware composite (defaults → hardware on by default).
+    hw = parameters_hardware if parameters_hardware is not None else DeckHardwareParameters()
+
     target_doc = _resolve_document(hull, document)
     label = name if name is not None else "Deck"
 
@@ -1815,6 +2635,20 @@ def build_deck(
             hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
         )
         target_doc.recompute()
+
+        # Spec 010 — deck hardware. Cross-deck collision checks run now that
+        # the deck plate + cabin trunk geometry exists; they raise
+        # DeckParameterError (caught + rolled back below). Build order per
+        # plan §Build Sequence; lifelines LAST (they need the railing).
+        _validate_cross_deck_hardware(deck_plate, cabin_trunk, hw)
+        rubrail = _build_rubrail(hull, deck_plate, target_doc, added, hardware=hw)
+        bow_pulpit = _build_bow_pulpit(hull, deck_plate, target_doc, added, hardware=hw)
+        anchor_locker = _build_anchor_locker(
+            deck_plate, cabin_trunk, target_doc, added, hardware=hw
+        )
+        cleats = _build_cleats(hull, deck_plate, target_doc, added, hardware=hw)
+        lifelines = _build_lifelines(deck_plate, target_doc, added, hardware=hw, superstructure=sp)
+        target_doc.recompute()
     except DeckParameterError:
         _rollback(target_doc, added)
         raise
@@ -1843,4 +2677,10 @@ def build_deck(
         hardtop=hardtop,
         hardtop_pillars=hardtop_pillars,
         railings=railings,
+        rubrail=rubrail,
+        bow_pulpit=bow_pulpit,
+        lifelines=lifelines,
+        anchor_locker=anchor_locker,
+        cleats=cleats,
+        parameters_hardware=hw,
     )
