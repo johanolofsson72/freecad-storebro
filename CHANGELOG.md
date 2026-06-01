@@ -4,6 +4,49 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-01
+
+Spec 014 — propulsion. The boat now has an engine room and running gear. A new
+`propulsion` module builds an inboard installation — engine bed, engine block,
+propeller shaft, propeller, and rudder — and seats it on the actual sampled
+hull. Twin-screw is the default (the historical RC34 layout); pass
+`engine_count=1` for a single screw. The hull solid is never cut: the shaft
+passes through an additive stern-tube boss, so the manifold stays intact and
+STL export is unaffected. First new geometry module beyond the v1.0 set, so the
+minor version bumps to 1.1.0. Every earlier call site keeps working unchanged.
+
+### Added
+
+- `build_propulsion(hull, deck=None, parameters=None, *, document=None, name="Propulsion")`:
+  composes the five components into a document and returns a `Propulsion`
+  aggregate.
+- `PropulsionParameters` composite plus the five component parameter dataclasses
+  `EngineBedParameters`, `EngineParameters`, `ShaftParameters`,
+  `PropellerParameters`, `RudderParameters` (all frozen, all validated).
+- Result wrappers `EngineBed`, `EngineBlock`, `Shaft`, `Propeller`, `Rudder`
+  and the `Propulsion` aggregate.
+- `PropulsionParameterError` / `PropulsionConstructionError`.
+- CLI `build` flags: `--engine-count {1,2}` (default 2) and `--no-propulsion`.
+- Defaults: twin screw, 400 mm engine offset, 10 degree shaft down-angle,
+  3-blade propeller, one rudder per screw.
+
+### Changed
+
+- `storebro build` now includes the propulsion bodies by default; the bodies
+  flow into every export format. Use `--no-propulsion` for the pre-1.1.0 output
+  set (hull + deck + interior only).
+- Version bumped 1.0.7 to 1.1.0 in `pyproject.toml` and `storebro.__version__`.
+
+### Notes
+
+- Geometry fidelity is representative, not CAD-faithful: the engine is a block,
+  the propeller blades are flat plates, the rudder is a foil plate. Detailed
+  machinery, airfoil blades, colors and materials are deferred (see
+  `specs/014-propulsion/spec.allium`).
+- The shaft penetration is an additive boss, not a real through-hull cavity —
+  a deliberate choice to avoid the non-manifold STL failures that specs 009 and
+  011 hit with boolean cuts on the dense-station hull.
+
 ## [1.0.3] - 2026-05-28
 
 Spec 009 — hull surface smoothness. The default hull now reads as a denser,

@@ -27,6 +27,10 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         "--format",
         "--no-overwrite",
         "--tessellation",
+        # spec 014 (propulsion) FR-011: the build command composes propulsion
+        # and exposes the one meaningful layout choice + an opt-out.
+        "--engine-count",
+        "--no-propulsion",
     }
 )
 

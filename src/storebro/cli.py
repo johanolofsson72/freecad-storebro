@@ -49,6 +49,12 @@ from storebro.interior import (
     InteriorParameterError,
     build_interior,
 )
+from storebro.propulsion import (
+    PropulsionConstructionError,
+    PropulsionParameterError,
+    PropulsionParameters,
+    build_propulsion,
+)
 
 __all__ = ["main"]
 
@@ -61,6 +67,7 @@ _INPUT_ERROR_TYPES: tuple[type[BaseException], ...] = (
     HullParameterError,
     DeckParameterError,
     InteriorParameterError,
+    PropulsionParameterError,
     ExportInputError,
 )
 
@@ -68,6 +75,7 @@ _SYSTEM_ERROR_TYPES: tuple[type[BaseException], ...] = (
     HullConstructionError,
     DeckConstructionError,
     InteriorConstructionError,
+    PropulsionConstructionError,
     ExportWriteError,
 )
 
@@ -140,6 +148,18 @@ def _build_top_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.001,
         help="STL tessellation tolerance in meters (only meaningful for --format stl). Default: 0.001.",
+    )
+    build_p.add_argument(
+        "--engine-count",
+        type=int,
+        choices=(1, 2),
+        default=2,
+        help="Propulsion layout: 1 (single screw) or 2 (twin screws). Default: 2.",
+    )
+    build_p.add_argument(
+        "--no-propulsion",
+        action="store_true",
+        help="Skip the propulsion step (hull + deck + interior only).",
     )
 
     subparsers.add_parser(
@@ -225,6 +245,14 @@ def _run_build(args: argparse.Namespace) -> int:
     hull = build_hull(document=fresh_doc)
     deck = build_deck(hull)
     build_interior(hull, deck, layout=args.layout)
+    if not args.no_propulsion:
+        # A single-screw layout is centred (offset 0); twin uses the default offset.
+        propulsion_params = (
+            PropulsionParameters(engine_count=1, engine_offset_y_mm=0.0)
+            if args.engine_count == 1
+            else PropulsionParameters(engine_count=2)
+        )
+        build_propulsion(hull, deck, parameters=propulsion_params)
 
     artifact: ExportArtifact
     fmt = args.format

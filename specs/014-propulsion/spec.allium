@@ -1,0 +1,639 @@
+-- allium: 3
+--
+-- Spec 014 — propulsion
+--
+-- Adds a parametric inboard propulsion installation to the Storebro model:
+-- engine bed (stringers), engine block, propeller shaft, propeller, and
+-- rudder. Each is a FreeCAD PartDesign body, parameterized by a frozen value
+-- type, seated on the ACTUAL sampled hull geometry, and composed by
+-- build_propulsion() into a PropulsionBundle. Single-screw (engine_count=1)
+-- and twin-screw (engine_count=2, default) configurations are supported; the
+-- twin layout mirrors port/starboard trains about the centreline. The hull
+-- solid is NEVER booleaned — the shaft penetration is an additive stern-tube
+-- boss (preserves manifold integrity per specs 009/011). First new public
+-- geometry module beyond the v1.0 hull/deck/interior/export/CLI set.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+
+    waterline_z_mm: Decimal = 0.0
+
+    default_engine_count: Integer = 2
+    default_engine_offset_y_mm: Decimal = 400.0
+    default_shaft_angle_deg: Decimal = 10.0
+    min_shaft_angle_deg: Decimal = 0.0
+    max_shaft_angle_deg: Decimal = 30.0
+
+    default_engine_bed_length_mm: Decimal = 1400.0
+    default_engine_bed_width_mm: Decimal = 120.0
+    default_engine_bed_height_mm: Decimal = 200.0
+
+    default_engine_length_mm: Decimal = 1100.0
+    default_engine_width_mm: Decimal = 600.0
+    default_engine_height_mm: Decimal = 700.0
+    default_engine_station_x_mm: Decimal = 3500.0
+
+    default_shaft_diameter_mm: Decimal = 45.0
+    default_shaft_exit_x_mm: Decimal = 1800.0
+
+    default_propeller_diameter_mm: Decimal = 450.0
+    default_propeller_hub_diameter_mm: Decimal = 90.0
+    default_propeller_blade_count: Integer = 3
+
+    default_rudder_chord_mm: Decimal = 300.0
+    default_rudder_span_mm: Decimal = 500.0
+    default_rudder_thickness_mm: Decimal = 40.0
+    default_rudder_stock_diameter_mm: Decimal = 50.0
+}
+
+-- External entities — produced by earlier specs, consumed here.
+-- Coordinate convention: bow = XMax, stern = XMin, waterline = Z=0,
+-- port = +Y / starboard = -Y, all millimetres.
+
+external entity HullBody {
+    loa_mm: Decimal
+    beam_max_mm: Decimal
+    draft_mm: Decimal
+    keel_z_min_mm: Decimal
+    sheer_z_aft_mm: Decimal
+}
+
+-- The deck is optional; it supplies the engine-height clearance ceiling.
+-- When absent, the ceiling falls back to the hull sheer at the engine station.
+external entity DeckPlate {
+    top_z_amidships_mm: Decimal
+}
+
+-- Value types — parametric inputs, no identity. Lengths mm, angles deg.
+
+value EngineBedParameters {
+    length_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.width_mm > 0
+        this.height_mm > 0
+    }
+}
+
+value EngineParameters {
+    length_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+    station_x_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.width_mm > 0
+        this.height_mm > 0
+    }
+
+    invariant NonNegativeStation {
+        this.station_x_mm >= 0
+    }
+}
+
+value ShaftParameters {
+    diameter_mm: Decimal
+    angle_deg: Decimal
+    exit_x_mm: Decimal
+
+    invariant PositiveDiameter {
+        this.diameter_mm > 0
+    }
+
+    invariant AngleBounded {
+        this.angle_deg >= 0.0
+        this.angle_deg <= 30.0
+    }
+
+    invariant NonNegativeExitStation {
+        this.exit_x_mm >= 0
+    }
+}
+
+value PropellerParameters {
+    diameter_mm: Decimal
+    hub_diameter_mm: Decimal
+    blade_count: Integer
+
+    invariant PositiveDimensions {
+        this.diameter_mm > 0
+        this.hub_diameter_mm > 0
+    }
+
+    invariant HubSmallerThanDisc {
+        this.hub_diameter_mm < this.diameter_mm
+    }
+
+    invariant SensibleBladeCount {
+        this.blade_count >= 2
+        this.blade_count <= 6
+    }
+}
+
+value RudderParameters {
+    chord_mm: Decimal
+    span_mm: Decimal
+    thickness_mm: Decimal
+    stock_diameter_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.chord_mm > 0
+        this.span_mm > 0
+        this.thickness_mm > 0
+        this.stock_diameter_mm > 0
+    }
+}
+
+value PropulsionParameters {
+    engine_count: Integer
+    engine_offset_y_mm: Decimal
+    rudder_count: Integer
+    engine_bed: EngineBedParameters
+    engine: EngineParameters
+    shaft: ShaftParameters
+    propeller: PropellerParameters
+    rudder: RudderParameters
+
+    invariant EngineCountSupported {
+        this.engine_count >= 1
+        this.engine_count <= 2
+    }
+
+    invariant RudderCountSupported {
+        this.rudder_count >= 1
+        this.rudder_count <= 2
+    }
+
+    invariant SingleScrewIsCentred {
+        this.engine_count = 1 implies this.engine_offset_y_mm = 0.0
+    }
+
+    invariant TwinScrewIsOffset {
+        this.engine_count = 2 implies this.engine_offset_y_mm > 0.0
+    }
+
+    invariant ShaftExitForwardOfEngineStation {
+        -- Exit (aft, smaller X) must be aft of the engine station.
+        this.shaft.exit_x_mm < this.engine.station_x_mm
+    }
+}
+
+-- Output entities — produced by the build operation. Every body carries the
+-- manifold-validity flags that gate STL export and a side marker for twin.
+
+entity EngineBedBody {
+    parameters: EngineBedParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    bbox_min_z_mm: Decimal
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+}
+
+entity EngineBlockBody {
+    parameters: EngineParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    rests_on_bed: Boolean
+    within_hull_envelope: Boolean
+    pierces_hull_shell: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant SeatedAndContained {
+        this.rests_on_bed = true
+        this.within_hull_envelope = true
+        this.pierces_hull_shell = false
+    }
+}
+
+entity ShaftBody {
+    parameters: ShaftParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    forward_z_mm: Decimal
+    aft_z_mm: Decimal
+    exit_x_mm: Decimal
+    exit_z_mm: Decimal
+    has_additive_stern_tube_boss: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant DownAndAft {
+        -- Forward (engine) end higher than aft (propeller) end.
+        this.forward_z_mm > this.aft_z_mm
+    }
+
+    invariant ExitBelowWaterline {
+        this.exit_z_mm <= 0.0
+    }
+
+    invariant AdditivePenetration {
+        this.has_additive_stern_tube_boss = true
+    }
+}
+
+entity PropellerBody {
+    parameters: PropellerParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    hub_x_mm: Decimal
+    bbox_min_z_mm: Decimal
+    blade_count: Integer
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant BelowWaterline {
+        this.bbox_min_z_mm < 0.0
+    }
+
+    invariant BladeCountMatchesParameters {
+        this.blade_count = this.parameters.blade_count
+    }
+}
+
+entity RudderBody {
+    parameters: RudderParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    x_mm: Decimal
+    bbox_min_z_mm: Decimal
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant BelowWaterline {
+        this.bbox_min_z_mm < 0.0
+    }
+}
+
+entity PropulsionBundle {
+    hull: HullBody
+    deck_plate: DeckPlate?
+    parameters: PropulsionParameters
+    hull_modified: Boolean
+    shape_digest: String
+
+    engine_beds: EngineBedBody with bundle = this
+    engines: EngineBlockBody with bundle = this
+    shafts: ShaftBody with bundle = this
+    propellers: PropellerBody with bundle = this
+    rudders: RudderBody with bundle = this
+
+    port_engines: engines where is_port = true
+    starboard_engines: engines where is_port = false
+    port_shafts: shafts where is_port = true
+    starboard_shafts: shafts where is_port = false
+
+    invariant HullNeverBooleaned {
+        this.hull_modified = false
+    }
+
+    invariant BedsMatchEngineCount {
+        this.engine_beds.count = this.parameters.engine_count
+    }
+
+    invariant EnginesMatchEngineCount {
+        this.engines.count = this.parameters.engine_count
+    }
+
+    invariant ShaftsMatchEngineCount {
+        this.shafts.count = this.parameters.engine_count
+    }
+
+    invariant PropellersMatchEngineCount {
+        this.propellers.count = this.parameters.engine_count
+    }
+
+    invariant RuddersMatchRudderCount {
+        this.rudders.count = this.parameters.rudder_count
+    }
+
+    invariant TwinTrainsSymmetric {
+        this.parameters.engine_count = 2
+            implies this.port_engines.count = this.starboard_engines.count
+    }
+}
+
+-- Rules — parameter validation, the build operation, and per-item builders.
+
+rule ValidatePropulsionParameters {
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.engine_count >= 1
+        params.engine_count <= 2
+        params.rudder_count >= 1
+        params.rudder_count <= 2
+        params.engine_offset_y_mm >= 0.0
+        params.shaft.angle_deg >= 0.0
+        params.shaft.angle_deg <= 30.0
+        params.shaft.diameter_mm > 0
+        params.propeller.diameter_mm > 0
+        params.propeller.hub_diameter_mm < params.propeller.diameter_mm
+        params.propeller.blade_count >= 2
+        params.propeller.blade_count <= 6
+        params.engine_bed.length_mm > 0
+        params.engine.length_mm > 0
+        params.rudder.chord_mm > 0
+        params.rudder.span_mm > 0
+}
+
+rule RejectSingleScrewWithOffset {
+    -- A single-screw installation must be on the centreline.
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.engine_count = 1 implies params.engine_offset_y_mm = 0.0
+}
+
+rule RejectTwinScrewWithoutOffset {
+    -- A twin-screw installation must offset its trains outboard.
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.engine_count = 2 implies params.engine_offset_y_mm > 0.0
+}
+
+rule RejectEngineOffsetPastTopsides {
+    -- A train pushed outboard past the hull half-beam at the engine station
+    -- is rejected (the engine would pierce the topsides).
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.engine_offset_y_mm + (params.engine.width_mm / 2)
+            <= hull.beam_max_mm / 2
+}
+
+rule RejectShaftExitNotAftOfEngine {
+    -- The shaft must run aft (toward smaller X) from the engine to the exit.
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.shaft.exit_x_mm < params.engine.station_x_mm
+}
+
+rule BuildPropulsion {
+    when: BuildPropulsion(hull, deck_plate, params)
+    ensures:
+        PropulsionBundle.created(
+            hull: hull,
+            deck_plate: deck_plate,
+            parameters: params,
+            hull_modified: false
+        )
+}
+
+rule BuildOneEngineBed {
+    -- One bed per train, seated above the keel at the engine station.
+    when: BuildOneEngineBed(params, hull, side)
+    ensures:
+        EngineBedBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true
+        )
+}
+
+rule BuildOneEngine {
+    -- One engine block per train, resting on its bed, inside the hull envelope.
+    when: BuildOneEngine(params, bed, hull, side)
+    ensures:
+        EngineBlockBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            rests_on_bed: true,
+            within_hull_envelope: true,
+            pierces_hull_shell: false
+        )
+}
+
+rule BuildOneShaft {
+    -- One shaft per train, down-and-aft, with an additive stern-tube boss at
+    -- the hull penetration (the hull solid is never cut).
+    when: BuildOneShaft(params, engine, hull, side)
+    ensures:
+        ShaftBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            exit_x_mm: params.exit_x_mm,
+            has_additive_stern_tube_boss: true
+        )
+}
+
+rule BuildOnePropeller {
+    -- One propeller per train, aft of the shaft exit on the shaft axis.
+    when: BuildOnePropeller(params, shaft, side)
+    requires:
+        params.diameter_mm > 0
+        params.hub_diameter_mm < params.diameter_mm
+    ensures:
+        PropellerBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            blade_count: params.blade_count
+        )
+}
+
+rule BuildOneRudder {
+    -- One rudder per configured rudder slot, aft of the propeller.
+    when: BuildOneRudder(params, propeller, side)
+    ensures:
+        RudderBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true
+        )
+}
+
+rule RollbackOnPartialFailure {
+    -- Any FreeCAD-side failure mid-build removes every body added so far.
+    when: PropulsionConstructionFails(bundle)
+    ensures: DocumentRestoredToPreCallState(bundle)
+}
+
+-- Global invariants — must hold across ALL bundles / bodies.
+
+invariant FreeCADIdiomaticAllBeds {
+    for b in EngineBedBody:
+        b.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllEngines {
+    for e in EngineBlockBody:
+        e.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllShafts {
+    for s in ShaftBody:
+        s.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllPropellers {
+    for p in PropellerBody:
+        p.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllRudders {
+    for r in RudderBody:
+        r.is_partdesign_body = true
+}
+
+invariant AllBedsManifold {
+    for b in EngineBedBody:
+        b.solid_count = 1
+        b.is_valid = true
+}
+
+invariant AllEnginesManifold {
+    for e in EngineBlockBody:
+        e.solid_count = 1
+        e.is_valid = true
+}
+
+invariant AllShaftsManifold {
+    for s in ShaftBody:
+        s.solid_count = 1
+        s.is_valid = true
+}
+
+invariant AllPropellersManifold {
+    for p in PropellerBody:
+        p.solid_count = 1
+        p.is_valid = true
+}
+
+invariant AllRuddersManifold {
+    for r in RudderBody:
+        r.solid_count = 1
+        r.is_valid = true
+}
+
+invariant EnginesNeverPierceHull {
+    for e in EngineBlockBody:
+        e.pierces_hull_shell = false
+        e.within_hull_envelope = true
+}
+
+invariant ShaftsRunDownAndAft {
+    for s in ShaftBody:
+        s.forward_z_mm > s.aft_z_mm
+}
+
+invariant ShaftExitsBelowWaterline {
+    for s in ShaftBody:
+        s.exit_z_mm <= 0.0
+}
+
+invariant PropellersBelowWaterline {
+    for p in PropellerBody:
+        p.bbox_min_z_mm < 0.0
+}
+
+invariant RuddersBelowWaterline {
+    for r in RudderBody:
+        r.bbox_min_z_mm < 0.0
+}
+
+invariant HullSolidNeverBooleaned {
+    for b in PropulsionBundle:
+        b.hull_modified = false
+}
+
+invariant DeterministicShapeDigest {
+    -- Two builds with identical inputs produce identical shape_digest.
+    for b1 in PropulsionBundle:
+        for b2 in PropulsionBundle:
+            b1.shape_digest = b2.shape_digest
+}
+
+invariant ReferenceFidelityWithinOnePercent {
+    for b in PropulsionBundle:
+        ReferenceDeviationPct(b) <= 1.0
+}
+
+-- Actors and surfaces — the library's public API. No human-facing UI; the
+-- consumer is a Python API call or CLI invocation, identified by the HullBody
+-- it passes in.
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface PropulsionBuildAPI {
+    facing consumer: LibraryConsumer
+    context hull: HullBody
+    context deck_plate: DeckPlate
+    context params: PropulsionParameters
+    provides: BuildPropulsion(hull, deck_plate, params)
+    exposes:
+        PropulsionBundle
+        consumer.loa_mm
+}
+
+-- Deferred items — known limitations + future work, consistent with the
+-- representative-fidelity scope of this spec.
+
+deferred EngineBlockBody.cad_faithful_diesel_detail
+deferred PropellerBody.airfoil_accurate_blade_geometry
+deferred RudderBody.naca_foil_section
+deferred ShaftBody.coupling_flange_and_strut_bearings
+deferred PropulsionBundle.colors_and_materials
+deferred PropulsionBundle.functional_through_hull_shaft_log_cavity
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md -> ## Clarifications -> Session 2026-06-01).
