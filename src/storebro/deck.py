@@ -735,6 +735,19 @@ class RubrailParameters:
     thickness: float = 40.0
     forward_x: float = 300.0
     aft_x: float = 10000.0
+    # spec 022 — moulded profile + chrome insert (additive, defaulted).
+    # The DEFAULT profile is the chamfered (straight-line) section: it is
+    # byte-reproducible under cumulative FreeCAD state (constitution II). The
+    # rounded (arc) outboard face is an explicit opt-in — its loft volume drifts
+    # under accumulated OCC tessellation state (the spec 018 arc-instability
+    # wall), so it is NOT used by default. ``outboard_fillet`` is the rounded
+    # radius applied only when ``rounded_profile`` is True.
+    rounded_profile: bool = False
+    outboard_fillet: float = 12.0  # rounded outboard-face radius (opt-in)
+    chamfer_width: float = 12.0  # chamfered outboard bevel (reproducible default)
+    chrome_insert: bool = True
+    insert_height: float = 18.0
+    insert_thickness: float = 8.0
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -750,6 +763,19 @@ class RubrailParameters:
                 "rubrail_forward_x<>aft_x",
                 None,
                 "forward_x must be < aft_x",
+            )
+        half_min = min(self.height, self.thickness) / 2.0
+        for name, value in (
+            ("rubrail_outboard_fillet", self.outboard_fillet),
+            ("rubrail_chamfer_width", self.chamfer_width),
+        ):
+            if not (0 < value <= half_min):
+                raise DeckParameterError(name, value, f"(0, {half_min}]")
+        if not (0 < self.insert_height < self.height):
+            raise DeckParameterError("rubrail_insert_height", self.insert_height, "(0, height)")
+        if not (0 < self.insert_thickness <= self.thickness):
+            raise DeckParameterError(
+                "rubrail_insert_thickness", self.insert_thickness, "(0, thickness]"
             )
 
 
@@ -770,6 +796,10 @@ class BowPulpitParameters:
     height: float = 600.0
     forward_extent: float = 400.0
     stanchion_count: int = 2
+    # spec 022 — radiused bends + welded joints (additive, defaulted).
+    bend_radius: float = 40.0  # corner-ball radius (0 → no rounding)
+    weld_beads: bool = True
+    weld_bead_radius: float = 4.0  # torus minor radius (bead proud of the tube)
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -782,6 +812,10 @@ class BowPulpitParameters:
             raise DeckParameterError("bow_pulpit_forward_extent", self.forward_extent, ">= 0")
         if self.stanchion_count < 0:
             raise DeckParameterError("bow_pulpit_stanchion_count", self.stanchion_count, ">= 0")
+        if self.bend_radius < 0:
+            raise DeckParameterError("bow_pulpit_bend_radius", self.bend_radius, ">= 0")
+        if self.weld_bead_radius <= 0:
+            raise DeckParameterError("bow_pulpit_weld_bead_radius", self.weld_bead_radius, "> 0")
 
 
 @dataclass(frozen=True)
@@ -800,6 +834,8 @@ class LifelineParameters:
     line_count: int = 1
     tube_diameter: float = 12.0
     height_fraction: float = 1.0
+    # spec 022 — true catenary sag (additive, defaulted; 0 → straight tube).
+    sag_depth: float = 25.0  # mid-span dip in mm
 
     def __post_init__(self) -> None:
         if self.line_count < 0:
@@ -812,6 +848,8 @@ class LifelineParameters:
                 self.height_fraction,
                 "(0, 1]",
             )
+        if self.sag_depth < 0:
+            raise DeckParameterError("lifeline_sag_depth", self.sag_depth, ">= 0")
 
 
 @dataclass(frozen=True)
@@ -831,6 +869,11 @@ class AnchorLockerParameters:
     width: float = 400.0
     height: float = 150.0
     center_x: float = 8500.0  # foredeck, forward of the cabin trunk (bow = XMax)
+    # spec 022 — functional recessed cavity + separate lid (additive, defaulted).
+    cavity_depth: float = 90.0  # 0 → solid box, no cavity, no lid
+    cavity_inset: float = 40.0  # wall thickness around the cavity
+    lid: bool = True
+    lid_thickness: float = 20.0
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -842,6 +885,16 @@ class AnchorLockerParameters:
                 raise DeckParameterError(name, value, "> 0")
         if self.center_x < 0:
             raise DeckParameterError("anchor_locker_center_x", self.center_x, ">= 0")
+        if not (0 <= self.cavity_depth < self.height):
+            raise DeckParameterError("anchor_locker_cavity_depth", self.cavity_depth, "[0, height)")
+        if not (0 < self.cavity_inset < min(self.length, self.width) / 2.0):
+            raise DeckParameterError(
+                "anchor_locker_cavity_inset",
+                self.cavity_inset,
+                f"(0, {min(self.length, self.width) / 2.0})",
+            )
+        if self.lid_thickness <= 0:
+            raise DeckParameterError("anchor_locker_lid_thickness", self.lid_thickness, "> 0")
 
 
 @dataclass(frozen=True)
@@ -864,6 +917,9 @@ class CleatParameters:
     station_count: int = 2
     length: float = 200.0
     height: float = 80.0
+    # spec 022 — contoured casting silhouette (additive, defaulted).
+    base_taper: float = 0.7  # top-footprint fraction of the base (1 = no taper)
+    horn_rise: float = 32.0  # how high the curved horn arcs above the base top
 
     def __post_init__(self) -> None:
         if self.count_per_station < 0:
@@ -876,6 +932,10 @@ class CleatParameters:
         ):
             if value <= 0:
                 raise DeckParameterError(name, value, "> 0")
+        if not (0 < self.base_taper <= 1.0):
+            raise DeckParameterError("cleat_base_taper", self.base_taper, "(0, 1]")
+        if self.horn_rise <= 0:
+            raise DeckParameterError("cleat_horn_rise", self.horn_rise, "> 0")
 
 
 @dataclass(frozen=True)
@@ -1256,6 +1316,9 @@ class Rubrail:
     body: Any
     height: float
     thickness: float
+    # spec 022 — present when the chrome insert strip was built.
+    has_chrome_insert: bool = False
+    insert_body: Any = None
 
 
 @dataclass(frozen=True)
@@ -1269,6 +1332,10 @@ class BowPulpit:
     body: Any
     tube_diameter: float
     height: float
+    # spec 022 — True when radiused bends + weld beads were built (False on the
+    # spec 010 straight-tube fallback).
+    has_radiused_bends: bool = False
+    has_weld_beads: bool = False
 
 
 @dataclass(frozen=True)
@@ -1297,6 +1364,9 @@ class AnchorLocker:
     length: float
     width: float
     height: float
+    # spec 022 — present when the recessed cavity + separate lid were built.
+    has_cavity: bool = False
+    lid_body: Any = None
 
 
 @dataclass(frozen=True)
@@ -1677,13 +1747,16 @@ def _slab_sketch_rect(
     half_h_mm: float,
     vertical_center_mm: float,
     added: list[Any],
+    center_w_mm: float = 0.0,
 ) -> Any:
     """Centered rectangle sketch on a YZ-parallel datum (spec 011 helper).
 
     Sketch local x = global Y, local y = global Z (datum normal = global X).
-    The rectangle is centered at (0, ``vertical_center_mm``) with the given
-    half-width (Y) and half-height (Z). Used for the windshield frame opening
-    and the glass pane.
+    The rectangle is centered at (``center_w_mm``, ``vertical_center_mm``) with
+    the given half-width (Y) and half-height (Z). ``center_w_mm`` defaults to 0
+    (the centerline) so existing spec 011 callers are unchanged; spec 022's
+    chrome insert offsets it to the rubrail outboard face. Used for the
+    windshield frame opening, the glass pane, and the rubrail chrome insert.
     """
     import FreeCAD
     import Part
@@ -1693,11 +1766,12 @@ def _slab_sketch_rect(
     sketch.AttachmentSupport = [(datum, "")]
     sketch.MapMode = "FlatFace"
     cz = vertical_center_mm
+    cw = center_w_mm
     pts = [
-        FreeCAD.Vector(-half_w_mm, cz - half_h_mm, 0),
-        FreeCAD.Vector(half_w_mm, cz - half_h_mm, 0),
-        FreeCAD.Vector(half_w_mm, cz + half_h_mm, 0),
-        FreeCAD.Vector(-half_w_mm, cz + half_h_mm, 0),
+        FreeCAD.Vector(cw - half_w_mm, cz - half_h_mm, 0),
+        FreeCAD.Vector(cw + half_w_mm, cz - half_h_mm, 0),
+        FreeCAD.Vector(cw + half_w_mm, cz + half_h_mm, 0),
+        FreeCAD.Vector(cw - half_w_mm, cz + half_h_mm, 0),
     ]
     line_ids: list[int] = []
     for i in range(4):
@@ -2727,6 +2801,211 @@ def _pd_circle_pad(
     return pad
 
 
+# ---------------------------------------------------------------------------
+# Spec 022 — deck-hardware detailing helpers (contoured/swept refinements).
+#
+# All construction stays PartDesign (Sketcher + AdditiveLoft/AdditivePipe/
+# Revolution/Pad/Pocket) so the parametric history survives GUI editing
+# (constitution III). A FreeCAD 1.1.1 spike de-risked each construction:
+#   - rounded rubrail section AdditiveLoft (Solids==1, valid)
+#   - catenary AdditivePipe (a = span^2 / 8*sag, horizontal-start profile)
+#   - Revolution elbow/weld-bead torus (section plane MUST contain the axis)
+#   - tapered base AdditiveLoft + 180-deg Revolution horn (one body, Solids==1)
+# ---------------------------------------------------------------------------
+
+
+def _discard_body(body: Any, target_doc: Any, added: list[Any]) -> None:
+    """Remove a failed PartDesign body (and its tracked features) from the doc.
+
+    Used by manifold-or-fallback gates: when a refined construction does not
+    yield a single valid solid, the partial body is discarded before the
+    fallback rebuilds it, so neither the document nor the rollback list keeps a
+    dangling object. Tolerant of already-removed children.
+    """
+    names = {body.Name}
+    for child in list(getattr(body, "Group", []) or []):
+        names.add(child.Name)
+    added[:] = [o for o in added if getattr(o, "Name", None) not in names]
+    with contextlib.suppress(BaseException):
+        target_doc.removeObject(body.Name)
+
+
+def _rubrail_section_sketch(
+    body: Any,
+    name: str,
+    x_along_mm: float,
+    y_center_mm: float,
+    top_z_mm: float,
+    half_t_mm: float,
+    half_h_mm: float,
+    profile_radius_mm: float,
+    *,
+    rounded: bool,
+    sign: int,
+    added: list[Any],
+) -> Any:
+    """A moulded rubrail cross-section on a YZ-parallel datum at ``x_along_mm``.
+
+    Local frame (YZ datum): local x = global Y, local y = global Z. The OUTBOARD
+    face is the ``sign``-ward Y side (port = +Y). When ``rounded`` the two
+    outboard corners are arc-filleted (the moulded-teak look); otherwise they are
+    chamfered with straight segments (the manifold-safe fallback, FR-001).
+    """
+    import FreeCAD
+    import Part
+
+    datum = _pd_make_datum_yz(body, f"{name}Datum", x_along_mm, 0.0, added)
+    sketch = body.newObject("Sketcher::SketchObject", name)
+    added.append(sketch)
+    sketch.AttachmentSupport = [(datum, "")]
+    sketch.MapMode = "FlatFace"
+
+    f = min(profile_radius_mm, half_t_mm * 0.95, half_h_mm * 0.95)
+    inb = y_center_mm - sign * half_t_mm  # inboard Y (toward centerline)
+    out = y_center_mm + sign * half_t_mm  # outboard Y
+    bot = top_z_mm - half_h_mm
+    top = top_z_mm + half_h_mm
+
+    def v(yy: float, zz: float) -> Any:
+        return FreeCAD.Vector(yy, zz, 0)
+
+    gids: list[int] = []
+    if rounded:
+        out_b = out - sign * f
+        out_a1 = FreeCAD.Vector(out, bot + f, 0)
+        out_a2 = FreeCAD.Vector(out, top - f, 0)
+        out_t = out - sign * f
+        # arc midpoints (45 deg) for the two outboard corners
+        m1 = FreeCAD.Vector(out - sign * f + sign * f * math.cos(math.pi / 4), bot + f - f * math.cos(math.pi / 4), 0)
+        m2 = FreeCAD.Vector(out - sign * f + sign * f * math.cos(math.pi / 4), top - f + f * math.cos(math.pi / 4), 0)
+        gids.append(sketch.addGeometry(Part.LineSegment(v(inb, bot), v(out_b, bot)), False))
+        gids.append(sketch.addGeometry(Part.Arc(v(out_b, bot), m1, out_a1), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(out_a1, out_a2), False))
+        gids.append(sketch.addGeometry(Part.Arc(out_a2, m2, v(out_t, top)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(out_t, top), v(inb, top)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(inb, top), v(inb, bot)), False))
+    else:
+        # Chamfered: bevel the two outboard corners with straight segments.
+        out_b = out - sign * f
+        out_t = out - sign * f
+        gids.append(sketch.addGeometry(Part.LineSegment(v(inb, bot), v(out_b, bot)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(out_b, bot), v(out, bot + f)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(out, bot + f), v(out, top - f)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(out, top - f), v(out_t, top)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(out_t, top), v(inb, top)), False))
+        gids.append(sketch.addGeometry(Part.LineSegment(v(inb, top), v(inb, bot)), False))
+    _pd_close_loop_constraints(sketch, gids)
+    return sketch
+
+
+def _is_single_valid_solid(shape: Any) -> bool:
+    """True iff ``shape`` is a non-null, valid, single-solid B-rep (FR-009)."""
+    return (
+        shape is not None
+        and not shape.isNull()
+        and shape.isValid()
+        and len(shape.Solids) == 1
+    )
+
+
+def _pd_swept_tube_xz(
+    body: Any,
+    name: str,
+    y_mm: float,
+    xz_points: list[tuple[float, float]],
+    radius_mm: float,
+    added: list[Any],
+) -> Any:
+    """Sweep a circular tube of ``radius_mm`` along a planar XZ path.
+
+    The spine lies in the XZ plane offset to global Y = ``y_mm``; ``xz_points``
+    are ``(global_x, global_z)`` waypoints joined by line segments (sample curves
+    finely). The profile circle sits on a YZ datum at the first waypoint, so the
+    section is perpendicular to the spine when the path starts roughly horizontal
+    (the lifeline catenary and the cleat horn arch both do). Returns the
+    ``PartDesign::AdditivePipe`` feature.
+    """
+    import FreeCAD
+    import Part
+    import Sketcher
+
+    x0, z0 = xz_points[0]
+    xz_plane = _pd_get_origin_plane(body, "XZ_Plane")
+    path_datum = body.newObject("PartDesign::Plane", f"{name}PathDatum")
+    added.append(path_datum)
+    path_datum.AttachmentSupport = [(xz_plane, "")]
+    path_datum.MapMode = "FlatFace"
+    path_datum.AttachmentOffset = FreeCAD.Placement(
+        FreeCAD.Vector(0.0, 0.0, y_mm), FreeCAD.Rotation()
+    )
+    path_sketch = body.newObject("Sketcher::SketchObject", f"{name}PathSketch")
+    added.append(path_sketch)
+    path_sketch.AttachmentSupport = [(path_datum, "")]
+    path_sketch.MapMode = "FlatFace"
+    pts = [FreeCAD.Vector(px, pz, 0) for (px, pz) in xz_points]  # local x=globalX, y=globalZ
+    pids = [
+        path_sketch.addGeometry(Part.LineSegment(pts[k], pts[k + 1]), False)
+        for k in range(len(pts) - 1)
+    ]
+    for k in range(len(pts) - 2):
+        path_sketch.addConstraint(Sketcher.Constraint("Coincident", pids[k], 2, pids[k + 1], 1))
+
+    yz_plane = _pd_get_origin_plane(body, "YZ_Plane")
+    prof_datum = body.newObject("PartDesign::Plane", f"{name}ProfDatum")
+    added.append(prof_datum)
+    prof_datum.AttachmentSupport = [(yz_plane, "")]
+    prof_datum.MapMode = "FlatFace"
+    prof_datum.AttachmentOffset = FreeCAD.Placement(
+        FreeCAD.Vector(0.0, 0.0, x0), FreeCAD.Rotation()
+    )
+    prof_sketch = body.newObject("Sketcher::SketchObject", f"{name}ProfSketch")
+    added.append(prof_sketch)
+    prof_sketch.AttachmentSupport = [(prof_datum, "")]
+    prof_sketch.MapMode = "FlatFace"
+    prof_sketch.addGeometry(
+        Part.Circle(FreeCAD.Vector(y_mm, z0, 0), FreeCAD.Vector(0, 0, 1), radius_mm).toShape().Curve,
+        False,
+    )
+    pipe = body.newObject("PartDesign::AdditivePipe", f"{name}Pipe")
+    added.append(pipe)
+    pipe.Profile = prof_sketch
+    pipe.Spine = path_sketch
+    return pipe
+
+
+def _pd_catenary_pipe(
+    body: Any,
+    name: str,
+    y_mm: float,
+    forward_x_mm: float,
+    aft_x_mm: float,
+    base_z_mm: float,
+    sag_depth_mm: float,
+    radius_mm: float,
+    added: list[Any],
+    *,
+    n_samples: int = 10,
+) -> Any | None:
+    """Sweep a circular tube along a true catenary between two railing posts.
+
+    The tube dips ``sag_depth_mm`` at mid-span following ``z(x) = a*cosh(x/a) - a``
+    with ``a = span^2 / (8*sag)`` (the standard shallow-catenary coefficient).
+    Returns the AdditivePipe feature, or ``None`` for a degenerate span/sag (the
+    caller then uses the straight fallback, FR-008).
+    """
+    span = aft_x_mm - forward_x_mm
+    if span <= 0 or sag_depth_mm <= 0:
+        return None
+    a = span * span / (8.0 * sag_depth_mm)
+    pts: list[tuple[float, float]] = []
+    for i in range(n_samples + 1):
+        xg = forward_x_mm + span * i / n_samples
+        xx = -span / 2.0 + span * i / n_samples
+        dip = a * math.cosh(xx / a) - a
+        pts.append((xg, base_z_mm - dip))
+    return _pd_swept_tube_xz(body, name, y_mm, pts, radius_mm, added)
+
+
 def _validate_cross_deck_hardware(
     deck_plate: DeckPlate,
     cabin_trunk: CabinTrunk,
@@ -2785,12 +3064,12 @@ def _build_rubrail(
 ) -> Rubrail:
     """Build the rubrail as a Part::Compound of port + starboard PartDesign Bodies.
 
-    Each side is an AdditiveLoft (Ruled=True) between rectangular cross-section
-    sketches placed on YZ-parallel datums at stations spanning
-    ``[forward_x, aft_x]``, centered on the sampled sheer (outer Y, top Z).
+    spec 022: each side is an AdditiveLoft (Ruled=True) of a MOULDED section —
+    a rounded outboard face by default, with a manifold-or-fallback gate to a
+    chamfered (straight-line) section if the rounded loft fails (FR-001). A
+    separate chrome insert strip body runs the rubrail length per side (FR-002).
     Implements spec 008's deferred ``SuperstructureBundle.rubrail`` (FR-005).
     """
-    import FreeCAD
     import Part
 
     rp = hardware.rubrail
@@ -2804,37 +3083,30 @@ def _build_rubrail(
     half_h = rp.height / 2.0
     half_t = rp.thickness / 2.0
 
-    side_bodies: list[Any] = []
-    for side, sign in (("Port", 1), ("Starboard", -1)):
+    def _build_side(side: str, sign: int, *, rounded: bool) -> Any:
         body = target_doc.addObject("PartDesign::Body", f"Deck_Rubrail_{side}")
         added.append(body)
         target_doc.recompute()
-
         section_sketches: list[Any] = []
         for idx, x_mm in enumerate(stations):
             outer_y = _interp_outer_y_at(samples, x_mm)
             top_z = _resolve_deck_top_z_at(deck_plate, x_mm)
-            y_center = sign * outer_y
-            datum = _pd_make_datum_yz(body, f"Rubrail{side}Datum{idx}", x_mm, 0.0, added)
-            sketch = body.newObject("Sketcher::SketchObject", f"Rubrail{side}Sketch{idx}")
-            added.append(sketch)
-            sketch.AttachmentSupport = [(datum, "")]
-            sketch.MapMode = "FlatFace"
-            # Sketch local x = global Y, local y = global Z.
-            pts = [
-                FreeCAD.Vector(y_center - half_t, top_z - half_h, 0),
-                FreeCAD.Vector(y_center + half_t, top_z - half_h, 0),
-                FreeCAD.Vector(y_center + half_t, top_z + half_h, 0),
-                FreeCAD.Vector(y_center - half_t, top_z + half_h, 0),
-            ]
-            line_ids: list[int] = []
-            for i in range(4):
-                j = (i + 1) % 4
-                line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
-            _pd_close_loop_constraints(sketch, line_ids)
-            section_sketches.append(sketch)
+            section_sketches.append(
+                _rubrail_section_sketch(
+                    body,
+                    f"Rubrail{side}{'R' if rounded else 'C'}Sketch{idx}",
+                    x_mm,
+                    sign * outer_y,
+                    top_z,
+                    half_t,
+                    half_h,
+                    rp.outboard_fillet if rounded else rp.chamfer_width,
+                    rounded=rounded,
+                    sign=sign,
+                    added=added,
+                )
+            )
         target_doc.recompute()
-
         loft = body.newObject("PartDesign::AdditiveLoft", f"Rubrail{side}Loft")
         added.append(loft)
         loft.Profile = (section_sketches[0], [""])
@@ -2842,8 +3114,64 @@ def _build_rubrail(
         loft.Ruled = True  # spec 009: Ruled=False overshoots on this profile
         loft.Closed = False
         target_doc.recompute()
+        return body
+
+    side_bodies: list[Any] = []
+    for side, sign in (("Port", 1), ("Starboard", -1)):
+        if rp.rounded_profile:
+            # Opt-in rounded face, guarded by a manifold-or-fallback gate to the
+            # deterministic chamfer (FR-001).
+            try:
+                body = _build_side(side, sign, rounded=True)
+                ok = _is_single_valid_solid(body.Shape)
+            except BaseException:
+                ok = False
+                body = None
+            if not ok:
+                if body is not None:
+                    _discard_body(body, target_doc, added)
+                body = _build_side(side, sign, rounded=False)
+        else:
+            # Default: the chamfered (straight-line) section is byte-reproducible
+            # under cumulative FreeCAD state (constitution II).
+            body = _build_side(side, sign, rounded=False)
         side_bodies.append(body)
 
+    # Chrome insert: a thin strip lofted along the outboard face of each side.
+    insert_bodies: list[Any] = []
+    if rp.chrome_insert:
+        for side, sign in (("Port", 1), ("Starboard", -1)):
+            ins = target_doc.addObject("PartDesign::Body", f"Deck_RubrailChromeInsert_{side}")
+            added.append(ins)
+            target_doc.recompute()
+            ins_sketches: list[Any] = []
+            for idx, x_mm in enumerate(stations):
+                outer_y = _interp_outer_y_at(samples, x_mm)
+                top_z = _resolve_deck_top_z_at(deck_plate, x_mm)
+                out = sign * (outer_y + half_t)
+                ins_sketches.append(
+                    _slab_sketch_rect(
+                        ins,
+                        _pd_make_datum_yz(ins, f"Insert{side}Datum{idx}", x_mm, 0.0, added),
+                        f"Insert{side}Sketch{idx}",
+                        rp.insert_thickness / 2.0,
+                        rp.insert_height / 2.0,
+                        top_z,
+                        added,
+                        center_w_mm=out - sign * rp.insert_thickness / 2.0,
+                    )
+                )
+            target_doc.recompute()
+            iloft = ins.newObject("PartDesign::AdditiveLoft", f"Insert{side}Loft")
+            added.append(iloft)
+            iloft.Profile = (ins_sketches[0], [""])
+            iloft.Sections = [(s, [""]) for s in ins_sketches[1:]]
+            iloft.Ruled = True
+            iloft.Closed = False
+            target_doc.recompute()
+            insert_bodies.append(ins)
+
+    # Teak rubrail compound (role "Deck_Rubrail" → trim).
     compound = target_doc.addObject("Part::Feature", "Deck_Rubrail")
     compound.Shape = Part.makeCompound([b.Shape for b in side_bodies])
     added.append(compound)
@@ -2854,10 +3182,24 @@ def _build_rubrail(
     )
     compound.SideBodyLabels = [b.Label for b in side_bodies]
 
+    # Chrome insert compound (separate render target so it colours metal, not
+    # teak — apply_render_attributes does not recurse into compound members).
+    insert_compound = None
+    if insert_bodies:
+        insert_compound = target_doc.addObject("Part::Feature", "Deck_RubrailChromeInsert")
+        insert_compound.Shape = Part.makeCompound([b.Shape for b in insert_bodies])
+        added.append(insert_compound)
+        insert_compound.addProperty(
+            "App::PropertyStringList", "SideBodyLabels", "Deck", "Port + starboard insert bodies"
+        )
+        insert_compound.SideBodyLabels = [b.Label for b in insert_bodies]
+
     return Rubrail(
         body=compound,
         height=rp.height / _MM_PER_M,
         thickness=rp.thickness / _MM_PER_M,
+        has_chrome_insert=insert_compound is not None,
+        insert_body=insert_compound,
     )
 
 
@@ -2876,7 +3218,15 @@ def _build_bow_pulpit(
     A transverse tube (padded +Y) joins the two forward ends across the bow.
     Symmetric about the centerline. Zero-stanchion fallback yields an empty
     body footprint (FR-016).
+
+    spec 022: the hard L-joints are rounded by ``AdditiveSphere`` corner balls
+    (radiused-bend reading) and ``AdditiveTorus`` weld beads wrap each joint
+    (welded-joint reading), all parametric primitives fused into the body. A
+    manifold-or-fallback gate (FR-008) keeps just the straight tubes if the
+    refinement fails to stay a single valid solid.
     """
+    import FreeCAD
+
     bp = hardware.bow_pulpit
     samples = _sheer_samples_mm(hull)
     radius = bp.tube_diameter / 2.0
@@ -2922,12 +3272,89 @@ def _build_bow_pulpit(
         _pd_circle_pad(body, t_datum, "PulpitCross", 0.0, 0.0, radius, 2.0 * outer_y, added)
         target_doc.recompute()
 
+    # spec 022 — radiused-bend corner balls + welded-joint beads. Each is an
+    # additive primitive placed at a joint; the gate reverts to the straight
+    # tubes (already built above) on any failure.
+    has_bends = False
+    has_beads = False
+    if per_side > 0 and (bp.bend_radius > 0 or bp.weld_beads):
+        prev_tip = body.Tip  # restore on fallback so the body keeps a valid Tip
+        refinement: list[Any] = []
+
+        # Additive primitives have no AttachmentSupport, so MapMode is
+        # 'Deactivated' and AttachmentOffset is IGNORED — position via .Placement.
+        def _ball(name: str, x: float, y: float, z: float, r: float) -> None:
+            sph = body.newObject("PartDesign::AdditiveSphere", name)
+            added.append(sph)
+            refinement.append(sph)
+            sph.Radius = r
+            sph.Placement = FreeCAD.Placement(FreeCAD.Vector(x, y, z), FreeCAD.Rotation())
+
+        def _bead(name: str, x: float, y: float, z: float, rot: Any) -> None:
+            tor = body.newObject("PartDesign::AdditiveTorus", name)
+            added.append(tor)
+            refinement.append(tor)
+            tor.Radius1 = radius
+            tor.Radius2 = bp.weld_bead_radius
+            tor.Placement = FreeCAD.Placement(FreeCAD.Vector(x, y, z), rot)
+
+        try:
+            for side, sign in (("Port", 1), ("Starboard", -1)):
+                y = sign * outer_y
+                if bp.bend_radius > 0:
+                    # Corner ball rounds the stanchion-to-rail L-joint. Sized to
+                    # robustly engulf both tube ends (a marginal/tangent ball
+                    # leaves a 2-solid body), so the fuse stays a single solid.
+                    _ball(
+                        f"Pulpit{side}CornerBall",
+                        stanchion_x,
+                        y,
+                        rail_z,
+                        radius + max(bp.bend_radius * 0.4, radius * 0.8),
+                    )
+                if bp.weld_beads:
+                    # Bead at the stanchion base (tube along Z → torus axis Z).
+                    _bead(
+                        f"Pulpit{side}BaseBead",
+                        stanchion_x,
+                        y,
+                        deck_top_z + radius,
+                        FreeCAD.Rotation(),
+                    )
+                    if bp.forward_extent > 0:
+                        # Bead at the rail/cross forward corner (tube along Y → axis Y).
+                        _bead(
+                            f"Pulpit{side}FwdBead",
+                            fwd_x,
+                            y,
+                            rail_z,
+                            FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 90),
+                        )
+            target_doc.recompute()
+            if not _is_single_valid_solid(body.Shape):
+                raise DeckConstructionError("pulpit refinement non-manifold")
+            has_bends = bp.bend_radius > 0
+            has_beads = bp.weld_beads
+        except BaseException:
+            # Roll back just the refinement features; keep the straight tubes.
+            for obj in refinement:
+                added[:] = [a for a in added if getattr(a, "Name", None) != obj.Name]
+                with contextlib.suppress(BaseException):
+                    target_doc.removeObject(obj.Name)
+            # Restore the Tip to the last straight-tube feature so the body keeps
+            # a valid Shape (removing the refinement features orphaned the Tip).
+            with contextlib.suppress(BaseException):
+                body.Tip = prev_tip
+            target_doc.recompute()
+
     body.addProperty("App::PropertyLength", "TubeDiameter", "Deck", "Bow pulpit tube diameter")
     body.TubeDiameter = bp.tube_diameter
     return BowPulpit(
         body=body,
         tube_diameter=bp.tube_diameter / _MM_PER_M,
         height=bp.height / _MM_PER_M,
+        has_radiused_bends=has_bends,
+        has_weld_beads=has_beads,
     )
 
 
@@ -2942,8 +3369,13 @@ def _build_anchor_locker(
     """Build the anchor locker as a raised box PartDesign::Body (FR-008).
 
     A rectangular sketch (length x width) on an XY-parallel datum at the
-    foredeck top Z near the bow, padded up by ``height``. NOT a boolean
-    recess (deferred). Placement validated by build_deck before this runs.
+    foredeck top Z near the bow, padded up by ``height``. NOT a boolean on the
+    hull/deck. Placement validated by build_deck before this runs.
+
+    spec 022: a blind ``PartDesign::Pocket`` cavity is cut into the locker TOP
+    (on the locker body only — FR-007 keeps the hull/deck untouched), leaving a
+    floor + walls; a separate teak lid body is seated over the cavity (FR-006).
+    ``cavity_depth == 0`` reproduces the spec 010 solid box (no cavity, no lid).
     """
     import FreeCAD
     import Part
@@ -2953,6 +3385,7 @@ def _build_anchor_locker(
     fwd_x = al.center_x - al.length / 2.0
     aft_x = al.center_x + al.length / 2.0
     half_w = al.width / 2.0
+    top_z = deck_top_z + al.height
 
     body = target_doc.addObject("PartDesign::Body", "Deck_AnchorLocker")
     added.append(body)
@@ -2985,6 +3418,69 @@ def _build_anchor_locker(
     pad.Reversed = False
     target_doc.recompute()
 
+    # spec 022 — recessed cavity (Pocket from the top face, blind) + separate lid.
+    has_cavity = False
+    lid_body: Any = None
+    if al.cavity_depth > 0:
+        cav_datum = _pd_make_datum_xy(body, "LockerCavityDatum", top_z, added)
+        cav_sketch = body.newObject("Sketcher::SketchObject", "LockerCavitySketch")
+        added.append(cav_sketch)
+        cav_sketch.AttachmentSupport = [(cav_datum, "")]
+        cav_sketch.MapMode = "FlatFace"
+        cpts = [
+            FreeCAD.Vector(fwd_x + al.cavity_inset, -half_w + al.cavity_inset, 0),
+            FreeCAD.Vector(aft_x - al.cavity_inset, -half_w + al.cavity_inset, 0),
+            FreeCAD.Vector(aft_x - al.cavity_inset, half_w - al.cavity_inset, 0),
+            FreeCAD.Vector(fwd_x + al.cavity_inset, half_w - al.cavity_inset, 0),
+        ]
+        cids: list[int] = []
+        for i in range(4):
+            j = (i + 1) % 4
+            cids.append(cav_sketch.addGeometry(Part.LineSegment(cpts[i], cpts[j]), False))
+        _pd_close_loop_constraints(cav_sketch, cids)
+        target_doc.recompute()
+        pocket = body.newObject("PartDesign::Pocket", "LockerCavityPocket")
+        added.append(pocket)
+        pocket.Profile = (cav_sketch, [""])
+        pocket.Length = al.cavity_depth
+        pocket.Reversed = False
+        target_doc.recompute()
+        if not _is_single_valid_solid(body.Shape):
+            raise DeckConstructionError("anchor-locker cavity produced a non-manifold solid")
+        has_cavity = True
+
+        if al.lid:
+            lid_body = target_doc.addObject("PartDesign::Body", "Deck_AnchorLockerLid")
+            added.append(lid_body)
+            target_doc.recompute()
+            lid_datum = _pd_make_datum_xy(lid_body, "LockerLidDatum", top_z, added)
+            lid_sketch = lid_body.newObject("Sketcher::SketchObject", "LockerLidSketch")
+            added.append(lid_sketch)
+            lid_sketch.AttachmentSupport = [(lid_datum, "")]
+            lid_sketch.MapMode = "FlatFace"
+            # Lid footprint covers the cavity opening with a small overlap onto
+            # the rim so it reads as a seated lid (half the inset).
+            margin = al.cavity_inset / 2.0
+            lpts = [
+                FreeCAD.Vector(fwd_x + margin, -half_w + margin, 0),
+                FreeCAD.Vector(aft_x - margin, -half_w + margin, 0),
+                FreeCAD.Vector(aft_x - margin, half_w - margin, 0),
+                FreeCAD.Vector(fwd_x + margin, half_w - margin, 0),
+            ]
+            lids: list[int] = []
+            for i in range(4):
+                j = (i + 1) % 4
+                lids.append(lid_sketch.addGeometry(Part.LineSegment(lpts[i], lpts[j]), False))
+            _pd_close_loop_constraints(lid_sketch, lids)
+            target_doc.recompute()
+            lid_pad = lid_body.newObject("PartDesign::Pad", "LockerLidPad")
+            added.append(lid_pad)
+            lid_pad.Profile = (lid_sketch, [""])
+            lid_pad.Length = al.lid_thickness
+            lid_pad.Midplane = False
+            lid_pad.Reversed = False
+            target_doc.recompute()
+
     body.addProperty("App::PropertyLength", "LockerLength", "Deck", "Anchor locker length")
     body.LockerLength = al.length
     return AnchorLocker(
@@ -2992,6 +3488,8 @@ def _build_anchor_locker(
         length=al.length / _MM_PER_M,
         width=al.width / _MM_PER_M,
         height=al.height / _MM_PER_M,
+        has_cavity=has_cavity,
+        lid_body=lid_body,
     )
 
 
@@ -3032,6 +3530,26 @@ def _build_cleats(
         inboard = cp.length  # nudge cleats inboard from the sheer by ~one length
         half_w = cp.length * 0.18
         horn_radius = cp.height * 0.18
+        hl = cp.length / 2.0
+        base_h = cp.height * 0.5
+
+        def _local_rect_sketch(
+            body: Any, name: str, hx: float, hy: float, z: float
+        ) -> Any:
+            datum = _pd_make_datum_xy(body, name + "Datum", z, added)
+            sk = body.newObject("Sketcher::SketchObject", name)
+            added.append(sk)
+            sk.AttachmentSupport = [(datum, "")]
+            sk.MapMode = "FlatFace"
+            p = [
+                FreeCAD.Vector(-hx, -hy, 0),
+                FreeCAD.Vector(hx, -hy, 0),
+                FreeCAD.Vector(hx, hy, 0),
+                FreeCAD.Vector(-hx, hy, 0),
+            ]
+            ids = [sk.addGeometry(Part.LineSegment(p[i], p[(i + 1) % 4]), False) for i in range(4)]
+            _pd_close_loop_constraints(sk, ids)
+            return sk
 
         seq = 0
         for x_mm in station_xs:
@@ -3047,55 +3565,47 @@ def _build_cleats(
                     added.append(body)
                     target_doc.recompute()
 
-                    # Base block: rectangle (length x 2*half_w) padded up.
-                    base_datum = _pd_make_datum_xy(
-                        body, f"Cleat{side}{seq}BaseDatum", deck_top_z, added
+                    # spec 022 — contoured casting: tapered base (Ruled=True loft,
+                    # bottom footprint > top) + an arched horn (180-deg Revolution
+                    # about the local Y axis whose arms drop into the base so the
+                    # body fuses to a single solid). Built in LOCAL coordinates and
+                    # seated via body.Placement.
+                    s_bot = _local_rect_sketch(body, f"Cleat{seq}Bot", hl, half_w, 0.0)
+                    s_top = _local_rect_sketch(
+                        body, f"Cleat{seq}Top", hl * cp.base_taper, half_w * cp.base_taper, base_h
                     )
-                    base_sketch = body.newObject(
-                        "Sketcher::SketchObject", f"Cleat{side}{seq}BaseSketch"
-                    )
-                    added.append(base_sketch)
-                    base_sketch.AttachmentSupport = [(base_datum, "")]
-                    base_sketch.MapMode = "FlatFace"
-                    hl = cp.length / 2.0
-                    pts = [
-                        FreeCAD.Vector(cx - hl, cy - half_w, 0),
-                        FreeCAD.Vector(cx + hl, cy - half_w, 0),
-                        FreeCAD.Vector(cx + hl, cy + half_w, 0),
-                        FreeCAD.Vector(cx - hl, cy + half_w, 0),
-                    ]
-                    line_ids: list[int] = []
-                    for i in range(4):
-                        j = (i + 1) % 4
-                        line_ids.append(
-                            base_sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False)
-                        )
-                    _pd_close_loop_constraints(base_sketch, line_ids)
                     target_doc.recompute()
-                    base_pad = body.newObject("PartDesign::Pad", f"Cleat{side}{seq}BasePad")
-                    added.append(base_pad)
-                    base_pad.Profile = (base_sketch, [""])
-                    base_pad.Length = cp.height * 0.5
-                    base_pad.Midplane = False
-                    base_pad.Reversed = False
+                    loft = body.newObject("PartDesign::AdditiveLoft", f"Cleat{seq}BaseLoft")
+                    added.append(loft)
+                    loft.Profile = (s_bot, [""])
+                    loft.Sections = [(s_top, [""])]
+                    loft.Ruled = True
                     target_doc.recompute()
 
-                    # Horn bar: a fore-aft tube on top of the base (YZ datum, +X).
-                    horn_z = deck_top_z + cp.height * 0.7
-                    horn_datum = _pd_make_datum_yz(
-                        body, f"Cleat{side}{seq}HornDatum", cx - hl, horn_z, added
-                    )
-                    _pd_circle_pad(
-                        body,
-                        horn_datum,
-                        f"Cleat{side}{seq}Horn",
-                        cy,
-                        0.0,
-                        horn_radius,
-                        cp.length,
-                        added,
+                    # Arched horn: a shallow upward bulge swept along an XZ path
+                    # (same proven AdditivePipe pattern as the lifeline catenary,
+                    # bulging up instead of sagging). The arms sit on the base top
+                    # (z=base_h) and the tube dips into the base so the body fuses
+                    # to a single solid. Sample the parabolic arch into waypoints.
+                    hl_horn = hl * 0.55
+                    n_arch = 8
+                    arch_pts: list[tuple[float, float]] = []
+                    for i in range(n_arch + 1):
+                        xx = -hl_horn + 2.0 * hl_horn * i / n_arch
+                        rise = cp.horn_rise * (1.0 - (xx / hl_horn) ** 2)  # parabola, 0 at arms
+                        arch_pts.append((xx, base_h + rise))
+                    _pd_swept_tube_xz(body, f"Cleat{seq}Horn", 0.0, arch_pts, horn_radius, added)
+                    target_doc.recompute()
+
+                    # Seat the locally-built cleat on the actual deck station.
+                    body.Placement = FreeCAD.Placement(
+                        FreeCAD.Vector(cx, cy, deck_top_z), FreeCAD.Rotation()
                     )
                     target_doc.recompute()
+                    if not _is_single_valid_solid(body.Shape):
+                        raise DeckConstructionError(
+                            f"cleat {side}{seq} produced a non-manifold solid"
+                        )
                     cleat_bodies.append(body)
 
     compound = target_doc.addObject("Part::Feature", "Deck_Cleats")
@@ -3122,11 +3632,16 @@ def _build_lifelines(
     hardware: DeckHardwareParameters,
     superstructure: DeckSuperstructureParameters,
 ) -> Lifelines:
-    """Build lifelines as a Part::Compound of horizontal tubes (FR-007, FR-017).
+    """Build lifelines as a Part::Compound of tubes (FR-007, FR-017).
 
     One tube per side per line, strung between the railing posts at
     ``railing.height_above_deck * height_fraction``. Skipped entirely (empty
     compound) when the railing has zero posts.
+
+    spec 022: when ``sag_depth > 0`` each tube follows a true catenary
+    (``_pd_catenary_pipe``); a manifold-or-fallback gate (FR-008) reverts to the
+    spec 010 straight ``_pd_circle_pad`` tube on sweep failure. ``sag_depth == 0``
+    reproduces the spec 010 straight tube exactly.
     """
     import Part
 
@@ -3145,6 +3660,10 @@ def _build_lifelines(
         radius = ll.tube_diameter / 2.0
         span = rail.aft_x - rail.forward_x
 
+        def _straight_tube(body: Any, name: str, sign: int, line_z: float) -> None:
+            datum = _pd_make_datum_yz(body, f"{name}Datum", rail.forward_x, line_z, added)
+            _pd_circle_pad(body, datum, name, sign * rail_y, 0.0, radius, span, added)
+
         for line_idx in range(ll.line_count):
             # Distribute multiple lines evenly below the railing top.
             if ll.line_count == 1:
@@ -3153,25 +3672,41 @@ def _build_lifelines(
                 frac = ll.height_fraction * (line_idx + 1) / ll.line_count
             line_z = deck_top_z + rail.height_above_deck * frac
             for side, sign in (("Port", 1), ("Starboard", -1)):
+                name = f"Lifeline{side}{line_idx + 1}"
                 body = target_doc.addObject(
                     "PartDesign::Body", f"Deck_Lifeline_{side}_{line_idx + 1}"
                 )
                 added.append(body)
                 target_doc.recompute()
-                datum = _pd_make_datum_yz(
-                    body, f"Lifeline{side}{line_idx + 1}Datum", rail.forward_x, line_z, added
-                )
-                _pd_circle_pad(
-                    body,
-                    datum,
-                    f"Lifeline{side}{line_idx + 1}",
-                    sign * rail_y,
-                    0.0,
-                    radius,
-                    span,
-                    added,
-                )
-                target_doc.recompute()
+                made = False
+                if ll.sag_depth > 0:
+                    try:
+                        pipe = _pd_catenary_pipe(
+                            body,
+                            name,
+                            sign * rail_y,
+                            rail.forward_x,
+                            rail.aft_x,
+                            line_z,
+                            ll.sag_depth,
+                            radius,
+                            added,
+                        )
+                        target_doc.recompute()
+                        made = pipe is not None and _is_single_valid_solid(body.Shape)
+                    except BaseException:
+                        made = False
+                    if not made:
+                        # Discard the failed pipe features, fall back to straight.
+                        _discard_body(body, target_doc, added)
+                        body = target_doc.addObject(
+                            "PartDesign::Body", f"Deck_Lifeline_{side}_{line_idx + 1}"
+                        )
+                        added.append(body)
+                        target_doc.recompute()
+                if not made:
+                    _straight_tube(body, name, sign, line_z)
+                    target_doc.recompute()
                 line_bodies.append(body)
 
     compound = target_doc.addObject("Part::Feature", "Deck_Lifelines")
@@ -3690,6 +4225,12 @@ def build_deck(
         anchor_locker.body,
         cleats.body,
     ]
+    # spec 022 — the chrome rubrail insert + teak locker lid are separate bodies
+    # so they resolve to their own render roles (metal / trim).
+    if rubrail.insert_body is not None:
+        _render_targets.append(rubrail.insert_body)
+    if anchor_locker.lid_body is not None:
+        _render_targets.append(anchor_locker.lid_body)
     if deckhouse is not None:
         # spec 016 — the deckhouse colours white via the "Deck_Deckhouse"
         # render role (see render._ROLE_RULES).

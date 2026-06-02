@@ -58,6 +58,9 @@ def test_non_glass_roles_are_opaque() -> None:
         ("Deck_Windshield", "frame"),
         ("Deck_Rubrail", "trim"),
         ("Deck_Rubrail_port", "trim"),
+        # spec 022: chrome insert beats the teak rubrail rule (most-specific-first).
+        ("Deck_RubrailChromeInsert", "metal"),
+        ("Deck_RubrailChromeInsert_Port", "metal"),
         ("Deck_Railings", "metal"),
         ("Deck_Railings_starboard", "metal"),
         ("Deck_BowPulpit", "metal"),
@@ -70,6 +73,8 @@ def test_non_glass_roles_are_opaque() -> None:
         ("Deck_CabinTrunk", "superstructure"),
         ("Deck_Hardtop", "superstructure"),
         ("Deck_AnchorLocker", "superstructure"),
+        # spec 022: teak locker lid beats the gelcoat locker rule.
+        ("Deck_AnchorLockerLid", "trim"),
         ("Interior_Alternativ3_ForwardCabin", "trim"),
         ("Interior_Alternativ1_Galley", "trim"),
         ("Propulsion_EngineBed", "engine"),

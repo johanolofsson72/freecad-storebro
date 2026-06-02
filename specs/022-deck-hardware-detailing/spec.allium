@@ -1,0 +1,224 @@
+-- allium: 3
+--
+-- Spec 022 — deck-hardware-detailing — ELICITED from spec.md
+--
+-- Detail the five spec 010 deck-hardware placeholders to a contoured,
+-- foundry-faithful level: moulded teak rubrail + chrome insert, bent-tube
+-- bow pulpit, sagging lifelines, contoured cleat castings, recessed
+-- anchor-locker cavity. Additive bodies only — the hull and deck solids are
+-- NEVER booleaned (FR-007). Swept refinements carry a manifold-or-fallback
+-- gate (FR-008). Every produced body is a single valid solid (FR-009,
+-- specs 009/011/018 discipline).
+
+config {
+    manifold_solids_count: Integer = 1
+    default_rubrail_fillet: Decimal = 12.0      -- mm, rounded outboard radius
+    default_rubrail_chamfer: Decimal = 12.0     -- mm, fallback bevel width
+    default_chrome_insert: Boolean = true
+    default_pulpit_bend_radius: Decimal = 40.0  -- mm
+    default_pulpit_weld_bead: Decimal = 18.0    -- mm torus minor radius
+    default_lifeline_sag: Decimal = 25.0        -- mm mid-span catenary dip
+    default_locker_cavity_depth: Decimal = 90.0 -- mm, < locker height
+    default_locker_lid_thickness: Decimal = 20.0 -- mm
+}
+
+-- The hull and deck plate are inputs; this spec must not mutate them.
+-- FR-007 (NOBOOL): a build result records that the host solids are identical
+-- whether or not the hardware refinements ran.
+entity HostSolids {
+    hull_unchanged: Boolean
+    deck_unchanged: Boolean
+
+    invariant HullNeverBooleaned { this.hull_unchanged = true }
+    invariant DeckNeverBooleaned { this.deck_unchanged = true }
+}
+
+entity Rubrail {
+    solids_count_per_side: Integer
+    is_valid: Boolean
+    outboard_profile: rounded | chamfered   -- chamfered = reproducible default
+    has_chrome_insert: Boolean
+
+    invariant SidesAreSolids { this.solids_count_per_side = 1 }
+    invariant Valid { this.is_valid = true }
+    -- FR-001: a moulded profile (never the plain rectangle). Chamfered is the
+    -- byte-reproducible default (constitution II); rounded is an opt-in guarded
+    -- by a manifold-or-fallback gate (arc lofts drift under cumulative state).
+    invariant MouldedNotRectangular { this.outboard_profile in {rounded, chamfered} }
+}
+
+entity ChromeInsert {
+    solids_count: Integer
+    is_valid: Boolean
+    render_role: chrome
+    fits_within_rubrail: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant ChromeRole { this.render_role = chrome }
+    invariant FitsEnvelope { this.fits_within_rubrail = true }
+}
+
+entity BowPulpit {
+    solids_count: Integer
+    is_valid: Boolean
+    has_radiused_bends: Boolean
+    has_weld_beads: Boolean       -- torus bead at each joint (chrome) unless fallback
+    fell_back_to_straight: Boolean
+    stanchion_count: Integer
+
+    -- FR-003/FR-008: a valid swept solid with bends + weld beads, or the
+    -- spec 010 straight-cylinder fallback. Zero stanchions => empty (FR-016).
+    invariant ValidOrFallback {
+        (this.solids_count = 1 and this.is_valid = true)
+        or this.stanchion_count = 0
+    }
+    invariant BendsOrFallback {
+        this.has_radiused_bends = true or this.fell_back_to_straight = true
+    }
+    -- Weld beads accompany the swept bends; absent on the straight fallback.
+    invariant WeldBeadsWithBends {
+        this.has_weld_beads = this.has_radiused_bends
+    }
+}
+
+entity Lifeline {
+    solids_count: Integer
+    is_valid: Boolean
+    sag_depth: Decimal
+    mid_span_below_ends: Boolean
+    is_catenary: Boolean          -- FR-004: true hyperbolic-cosine sag path
+    fell_back_to_straight: Boolean
+
+    invariant ValidOrFallback {
+        (this.solids_count = 1 and this.is_valid = true)
+        or this.fell_back_to_straight = true
+    }
+    -- FR-004: non-zero sag dips the mid-span along a catenary; zero sag straight.
+    invariant SagWhenRequested {
+        this.sag_depth = 0.0 or this.mid_span_below_ends = true
+        or this.fell_back_to_straight = true
+    }
+    invariant CatenaryWhenSagging {
+        this.sag_depth = 0.0 or this.is_catenary = true
+        or this.fell_back_to_straight = true
+    }
+}
+
+entity Cleat {
+    solids_count: Integer
+    is_valid: Boolean
+    base_is_tapered: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant Contoured { this.base_is_tapered = true }
+}
+
+entity AnchorLocker {
+    solids_count: Integer
+    is_valid: Boolean
+    cavity_depth: Decimal
+    locker_height: Decimal
+    has_cavity: Boolean
+    has_lid: Boolean              -- FR-006: separate lid body over the cavity
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    -- FR-006: cavity must leave a floor.
+    invariant CavityLeavesFloor { this.cavity_depth < this.locker_height }
+    invariant CavityWhenRequested {
+        this.cavity_depth = 0.0 or this.has_cavity = true
+    }
+    -- A lid accompanies a present cavity (and is absent on the solid box).
+    invariant LidWithCavity { this.has_lid = this.has_cavity }
+}
+
+-- The separate locker lid is its own additive solid (teak).
+entity LockerLid {
+    solids_count: Integer
+    is_valid: Boolean
+    render_role: teak
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant TeakRole { this.render_role = teak }
+}
+
+rule BuildMouldedRubrail {
+    when: BuildRubrail(rounded_opt_in, chrome_insert)
+    ensures:
+        -- Chamfer is the reproducible default; rounded only when opted in AND the
+        -- arc loft passes the manifold gate (else it falls back to chamfer).
+        if rounded_opt_in and RoundedLoftValid():
+            Rubrail.created(solids_count_per_side: 1, is_valid: true, outboard_profile: rounded, has_chrome_insert: chrome_insert)
+        if not (rounded_opt_in and RoundedLoftValid()):
+            Rubrail.created(solids_count_per_side: 1, is_valid: true, outboard_profile: chamfered, has_chrome_insert: chrome_insert)
+        if chrome_insert:
+            ChromeInsert.created(solids_count: 1, is_valid: true, render_role: chrome, fits_within_rubrail: true)
+}
+
+rule BuildBentPulpit {
+    when: BuildBowPulpit(bend_radius, stanchion_count)
+    requires: bend_radius >= 0
+    ensures:
+        if SweepSucceeds() and stanchion_count > 0:
+            BowPulpit.created(solids_count: 1, is_valid: true, has_radiused_bends: true, has_weld_beads: true, fell_back_to_straight: false)
+        if not SweepSucceeds() and stanchion_count > 0:
+            BowPulpit.created(solids_count: 1, is_valid: true, has_radiused_bends: false, has_weld_beads: false, fell_back_to_straight: true)
+}
+
+rule BuildSaggingLifeline {
+    when: BuildLifeline(sag_depth)
+    requires: sag_depth >= 0
+    ensures:
+        if SweepSucceeds() and sag_depth > 0:
+            Lifeline.created(solids_count: 1, is_valid: true, mid_span_below_ends: true, is_catenary: true, fell_back_to_straight: false)
+        if not SweepSucceeds():
+            Lifeline.created(solids_count: 1, is_valid: true, mid_span_below_ends: false, is_catenary: false, fell_back_to_straight: true)
+}
+
+rule BuildContouredCleat {
+    when: BuildCleat(taper, horn_curve)
+    requires: taper > 0
+    ensures:
+        Cleat.created(solids_count: 1, is_valid: true, base_is_tapered: true)
+}
+
+rule BuildRecessedLocker {
+    when: BuildAnchorLocker(cavity_depth, height)
+    requires: cavity_depth < height
+    ensures:
+        let loc = AnchorLocker.created(solids_count: 1, is_valid: true)
+        loc.cavity_depth = cavity_depth
+        loc.locker_height = height
+        loc.has_cavity = cavity_depth > 0.0
+        loc.has_lid = cavity_depth > 0.0
+        if cavity_depth > 0.0:
+            LockerLid.created(solids_count: 1, is_valid: true, render_role: teak)
+}
+
+rule RollbackOnFailure {
+    when: FreecadFailure(stage)
+    requires: stage = hardware_build
+    ensures:
+        ConstructionErrorRaised()
+        DocumentRestoredToPreCallState()
+}
+
+-- FR-009: every produced body stays a single manifold solid.
+invariant AllHardwareManifold {
+    for c in Cleat: c.solids_count = 1
+}
+
+-- FR-007 (NOBOOL): the host solids are untouched by every refinement.
+invariant HostsUntouched {
+    for s in HostSolids: s.hull_unchanged = true and s.deck_unchanged = true
+}
+
+actor Builder { identified_by: Rubrail }
+
+-- All four "next-tier" refinements were promoted from deferred to in-scope by
+-- the user during elicitation (2026-06-02): rounded rubrail fillet (with
+-- chamfer fallback), pulpit torus weld beads, true catenary lifelines, and the
+-- separate locker lid body. Nothing remains deferred for this spec.

@@ -49,3 +49,30 @@ def test_non_positive_dimension_raises(field: str, name: str, value: float) -> N
     with pytest.raises(DeckParameterError) as exc:
         CleatParameters(**{field: value})
     assert exc.value.parameter_name == name
+
+
+# --- spec 022: contoured casting -------------------------------------------
+
+
+def test_spec022_defaults() -> None:
+    p = CleatParameters()
+    assert p.base_taper == 0.7
+    assert p.horn_rise == 32.0
+
+
+@pytest.mark.parametrize("value", [0.0, -0.1, 1.01, 2.0])
+def test_base_taper_out_of_range_raises(value: float) -> None:
+    with pytest.raises(DeckParameterError) as exc:
+        CleatParameters(base_taper=value)
+    assert exc.value.parameter_name == "cleat_base_taper"
+
+
+def test_base_taper_one_allowed() -> None:
+    assert CleatParameters(base_taper=1.0).base_taper == 1.0
+
+
+@pytest.mark.parametrize("value", [0.0, -5.0])
+def test_non_positive_horn_rise_raises(value: float) -> None:
+    with pytest.raises(DeckParameterError) as exc:
+        CleatParameters(horn_rise=value)
+    assert exc.value.parameter_name == "cleat_horn_rise"

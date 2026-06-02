@@ -103,6 +103,8 @@ _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Deck_DeckhouseWindowGlass", "glass"),
     ("Hull_PortholeGlass", "glass"),
     ("Deck_Windshield", "frame"),
+    # spec 022: the chrome rubrail insert must beat the "Deck_Rubrail" teak rule.
+    ("Deck_RubrailChromeInsert", "metal"),
     ("Deck_Rubrail", "trim"),
     ("Deck_Railings", "metal"),
     ("Deck_BowPulpit", "metal"),
@@ -114,6 +116,8 @@ _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Deck_CabinTrunk", "superstructure"),
     ("Deck_Deckhouse", "superstructure"),
     ("Deck_Hardtop", "superstructure"),
+    # spec 022: the teak locker lid must beat the "Deck_AnchorLocker" gelcoat rule.
+    ("Deck_AnchorLockerLid", "trim"),
     ("Deck_AnchorLocker", "superstructure"),
     ("HullBody", "hull"),
     ("Bulkhead", "bulkhead"),

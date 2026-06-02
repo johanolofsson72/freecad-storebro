@@ -4,6 +4,44 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-06-03
+
+Spec 022 — deck-hardware detailing. The five spec 010 placeholders stop looking
+like a kit of straight tubes and boxes. The rubrail gets a moulded (chamfered)
+section and a separate chrome insert strip running its length. The bow pulpit
+gets rounded corner balls and torus weld beads at its joints, so it reads as a
+bent stainless rail instead of three cylinders meeting at right angles. The
+lifelines sag in a true catenary. Each cleat becomes a tapered casting with an
+arched horn. And the anchor locker gets a recessed cavity with its own lid, so
+it reads as something you can open.
+
+Every refinement is an additive PartDesign body seated on the sampled deck. The
+hull and deck plate are never cut, and each body stays a single valid solid, so
+STL export stays watertight. The bow pulpit and lifelines fall back to their
+spec 010 straight construction if a sweep fails.
+
+The rounded rubrail fillet is an opt-in (`rounded_profile=True`), not the
+default: its arc-loft volume drifts under accumulated FreeCAD state, which would
+break byte-reproducibility, so the chamfer — which is stable — is what you get
+unless you ask for the round.
+
+### Added
+
+- Moulded rubrail (`RubrailParameters.rounded_profile`, `outboard_fillet`,
+  `chamfer_width`) plus a chrome insert strip (`chrome_insert`, `insert_height`,
+  `insert_thickness`) with its own `chrome` render role.
+- Bow-pulpit corner balls and weld beads (`BowPulpitParameters.bend_radius`,
+  `weld_beads`, `weld_bead_radius`).
+- Lifeline catenary sag (`LifelineParameters.sag_depth`).
+- Cleat contour (`CleatParameters.base_taper`, `horn_rise`).
+- Anchor-locker recessed cavity and lid (`AnchorLockerParameters.cavity_depth`,
+  `cavity_inset`, `lid`, `lid_thickness`) with a `teak` lid render role.
+
+### Changed
+
+- The default deck hardware is now the contoured version; existing callers get
+  it automatically. No public type, field, or function was removed.
+
 ## [1.7.0] - 2026-06-02
 
 Spec 027 — CLI enhancements. Two practical additions to `storebro build`. A
