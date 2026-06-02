@@ -13,8 +13,9 @@ from storebro.hull import (
 )
 
 
-def test_default_station_count_is_nine() -> None:
-    assert HullParameters().station_count == DEFAULT_STATION_COUNT == 9
+def test_default_station_count_is_thirty_one() -> None:
+    # spec 018: default densified 9 -> 31 for a smooth-reading Ruled=True hull.
+    assert HullParameters().station_count == DEFAULT_STATION_COUNT == 31
 
 
 def test_station_count_at_b_spline_threshold_is_accepted() -> None:
@@ -34,7 +35,7 @@ def test_station_count_below_minimum_raises() -> None:
         HullParameters(station_count=STATION_COUNT_MIN - 1)
     err = exc_info.value
     assert err.parameter_name == "station_count"
-    assert "3" in err.valid_range and "21" in err.valid_range
+    assert "3" in err.valid_range and "81" in err.valid_range
 
 
 def test_station_count_above_maximum_raises() -> None:

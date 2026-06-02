@@ -4,6 +4,32 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-02
+
+Spec 018 — hull surface curvature v2. The default hull now reads as a smooth
+hull, not a nine-facet wedge. Smoothness comes from station density under the
+exact `Ruled=True` loft, not from a B-spline: a FreeCAD spike measured the
+`Ruled=False` B-spline overshooting the beam by 12-141% across every
+station-spacing strategy (uniform, Chebyshev, stem-clustered, amidships), while
+`Ruled=True` is exact (0%). So the default station count goes from 9 to 31 and
+the cap from 21 to 81; the facets drop below visual resolution and the hull
+stays exact, manifold, and STL-exportable at every density (verified at n=3, 9,
+31, 81 on FreeCAD 1.1.1). True B-spline is recorded as permanently infeasible
+for this profile, and a raw `Part.BSplineSurface` skin was rejected for not
+being a PartDesign-editable feature (constitution III).
+
+The quarter-circle bilge arc was re-attempted at the new density and re-deferred
+again: its B-rep is a valid single solid, but the tessellated mesh is not
+watertight, so STL export fails. The hull keeps its sharp chine. The denser
+default changes the default hull's geometry (an intended fidelity improvement),
+so this is a minor bump; pin `station_count=9` to reproduce the old shape.
+
+### Changed
+
+- `DEFAULT_STATION_COUNT` 9 → 31 (smoother default hull) and `STATION_COUNT_MAX`
+  21 → 81 (`station_count` validated to `[3, 81]`). `station_count=9`
+  reproduces the pre-1.4.0 hull.
+
 ## [1.3.0] - 2026-06-02
 
 Spec 016 — DS variant superstructure. The deck builder now has a second

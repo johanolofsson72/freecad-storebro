@@ -33,7 +33,10 @@ def test_export_fcstd_round_trip(tmp_path: Path) -> None:
 
     assert art.format == "fcstd"
     assert art.byte_count > 0
-    assert 0.0 < art.build_duration_seconds < 3.0  # SC-002 .FCStd budget (A1)
+    # Human-scale .FCStd budget. spec 018 densified the default hull (9 -> 31
+    # stations) for a smooth surface, which raises build+export time from ~2 s
+    # to ~3.4 s — still well within the spec 018 human-scale budget (n=81 < 10 s).
+    assert 0.0 < art.build_duration_seconds < 10.0
     assert out.is_file()
 
     # SC-004: reopen in FreeCAD, verify parametric history intact.

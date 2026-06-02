@@ -1,0 +1,153 @@
+-- allium: 3
+--
+-- Spec 018 — hull-surface-curvature-v2 — ELICITED from spec.md
+--
+-- Re-scoped after a FreeCAD spike killed the B-spline premise. Smoothness now
+-- comes from a denser Ruled=True station set (exact, manifold), not Ruled=False
+-- interpolation. The quarter-circle bilge arc is re-attempted behind a
+-- manifold/STL gate with a sharp-chine fallback.
+--
+-- Source spec: specs/018-hull-surface-curvature-v2/spec.md
+
+config {
+    station_count_min: Integer = 3
+    station_count_max: Integer = 81          -- raised from 21
+    default_station_count: Integer = 31      -- raised from 9
+    default_bilge_radius_m: Decimal = 0.10
+    thin_stem_half_width_m: Decimal = 0.005
+    manifold_solids_count: Integer = 1
+    fidelity_tolerance_pct: Decimal = 1.0
+    max_build_seconds_at_cap: Decimal = 10.0
+}
+
+enum ChineTopology { sharp_pentagon | rounded_bilge_arc | thin_stem }
+
+external entity StlArtifact { byte_count: Integer }
+
+value HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    station_count: Integer
+    bilge_radius: Decimal
+
+    invariant StationCountInRange {
+        this.station_count >= 3 and this.station_count <= 81
+    }
+    invariant BilgeRadiusNonNegative { this.bilge_radius >= 0 }
+}
+
+-- One cross-section sketch along the LOA.
+entity Station {
+    index: Integer
+    x_position: Decimal
+    is_stem: Boolean
+    topology: ChineTopology
+    vertex_count: Integer
+
+    -- Topology stays 5-vertex so AdditiveLoft maps vertices 1:1 across stations.
+    invariant FiveVertexTopology { this.vertex_count = 5 }
+    -- The stem never becomes a true degenerate vertex (overshoot-to-point mode).
+    invariant StemIsThinNotDegenerate {
+        this.is_stem implies this.topology = thin_stem
+    }
+}
+
+-- The lofted-and-mirrored hull solid.
+entity HullBody {
+    parameters: HullParameters
+    station_set_size: Integer
+    ruled: Boolean
+    solids_count: Integer
+    is_valid: Boolean
+    beam_overshoot_pct: Decimal
+    lengthwise_face_count: Integer
+
+    -- FR-001: always Ruled=True; the B-spline path is never taken.
+    invariant AlwaysRuledTrue { this.ruled = true }
+    -- FR-004: single manifold solid at every station count.
+    invariant ManifoldSolid { this.solids_count = 1 }
+    invariant ValidShape { this.is_valid = true }
+    -- FR-005: Ruled=True is exact — no beam overshoot beyond the fidelity bar.
+    invariant NoOvershoot { this.beam_overshoot_pct <= 1.0 }
+    -- FR-003/FR-002: the station set honors the count.
+    invariant StationSetMatchesCount {
+        this.station_set_size = this.parameters.station_count
+    }
+}
+
+-- FR-001..FR-005: build the dense Ruled=True hull.
+rule BuildDenseHull {
+    when: BuildHull(parameters)
+    requires:
+        parameters.station_count >= 3
+        parameters.station_count <= 81
+    ensures:
+        let hull = HullBody.created(
+            parameters: parameters,
+            station_set_size: parameters.station_count,
+            ruled: true,
+            solids_count: 1,
+            is_valid: true)
+        hull.beam_overshoot_pct <= 1.0
+}
+
+-- FR-006: bilge arc is attempted, kept only if the hull stays manifold + STL-able.
+rule AttemptBilgeArc {
+    when: BuildHull(parameters)
+    requires: parameters.bilge_radius > 0
+    ensures:
+        -- Either the rounded chine holds manifold...
+        if HullStaysManifoldWithArc():
+            ChineTopologyChosen(topology: rounded_bilge_arc)
+        -- ...or it falls back to the sharp pentagon (never a broken mesh).
+        if not HullStaysManifoldWithArc():
+            ChineTopologyChosen(topology: sharp_pentagon)
+}
+
+-- FR-007: zero radius keeps the sharp chine.
+rule SharpChineWhenZeroRadius {
+    when: BuildHull(parameters)
+    requires: parameters.bilge_radius = 0
+    ensures: ChineTopologyChosen(topology: sharp_pentagon)
+}
+
+-- FR-002: out-of-range station count rejected before construction.
+rule RejectStationCountOutOfRange {
+    when: BuildHull(parameters)
+    requires: not (parameters.station_count >= 3 and parameters.station_count <= 81)
+    ensures: ParameterErrorRaised(field: station_count, range: `[3, 81]`)
+}
+
+-- FR-012: FreeCAD failure rolls back and surfaces as a construction error.
+rule RollbackOnFailure {
+    when: FreecadFailure(stage)
+    requires: stage = hull_build
+    ensures:
+        ConstructionErrorRaised()
+        DocumentRestoredToPreCallState()
+}
+
+-- FR-004: every built hull exports to STL.
+invariant EveryHullExportsToStl {
+    for h in HullBody:
+        h.is_valid = true and h.solids_count = 1
+}
+
+-- FR-009: reproducible builds (same inputs -> identical geometry).
+invariant DeterministicBuild {
+    for h in HullBody:
+        h.ruled = true
+}
+
+actor Builder { identified_by: HullParameters }
+
+-- Permanently infeasible in FreeCAD 1.1.1 for this profile (spike evidence):
+-- Ruled=False overshoots the beam >=12%. Recorded, not implemented.
+deferred HullBody.b_spline_ruled_false_loft
+-- A raw Part.BSplineSurface skin would force smoothness but is not a
+-- PartDesign-editable feature (constitution III) — out of scope.
+deferred HullBody.raw_bspline_surface_skin
+-- Non-uniform / adaptive station spacing did not tame the overshoot in the
+-- spike; uniform spacing stays.
+deferred HullBody.adaptive_station_spacing

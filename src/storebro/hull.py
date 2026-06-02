@@ -39,10 +39,15 @@ __all__ = [
 # Module-level constants (spec 009 T001 — Constitution I: no magic numbers)
 # ---------------------------------------------------------------------------
 
-DEFAULT_STATION_COUNT = 9
+# spec 018: smoothness comes from station density under Ruled=True (exact,
+# manifold), not from Ruled=False B-spline interpolation. A FreeCAD spike
+# confirmed Ruled=False overshoots the beam >=12% for this profile while
+# Ruled=True is exact (0%), so the default is densified (9 -> 31) and the cap
+# raised (21 -> 81); facets then drop below visual resolution.
+DEFAULT_STATION_COUNT = 31
 DEFAULT_BILGE_RADIUS_M = 0.10
 STATION_COUNT_MIN = 3
-STATION_COUNT_MAX = 21
+STATION_COUNT_MAX = 81
 B_SPLINE_STATION_COUNT_THRESHOLD = 8
 OVERSHOOT_TOLERANCE_MM = 1.0
 REFERENCE_FIDELITY_TOLERANCE_PCT = 1.0
@@ -258,15 +263,19 @@ class HullParameters:
 
     @property
     def uses_b_spline_loft(self) -> bool:
-        """Always ``False`` in v1.0.3 — B-spline loft is deferred to v1.1+.
+        """Always ``False`` — the B-spline loft is permanently infeasible here.
 
-        Spec 009 originally wired this flag to ``station_count >= 8`` and
-        used it to switch the AdditiveLoft to ``Ruled=False``. Empirical
-        testing in FreeCAD 1.1.1 revealed B-spline interpolation is
-        unstable for the Storebro hull profile (see spec 009 closure note).
-        The flag is preserved as part of ``HullParameters`` for
-        forward-compatibility with the v1.1+ B-spline work but always
-        reports ``False`` in v1.0.3.
+        Spec 009 originally wired this flag to ``station_count >= 8`` and used
+        it to switch the AdditiveLoft to ``Ruled=False``. A spec 018 FreeCAD
+        spike re-confirmed with hard numbers that ``Ruled=False`` overshoots
+        the beam by 12-141% for the Storebro profile across uniform, Chebyshev,
+        stem-clustered, and amidships-clustered station spacing (vs the ±1%
+        fidelity bar), while ``Ruled=True`` is exact (0%). A raw
+        ``Part.BSplineSurface`` skin could force smoothness but is not a
+        PartDesign-editable feature (constitution III). Smoothness is therefore
+        delivered by station *density* under ``Ruled=True`` (spec 018), not by
+        interpolation. The flag is retained as a forward-compat hook but always
+        reports ``False``.
         """
         _ = self.station_count
         return False
@@ -285,16 +294,20 @@ class HullParameters:
 
     @property
     def uses_bilge_arc(self) -> bool:
-        """Always ``False`` in v1.0.3 — bilge arc is deferred to v1.1+.
+        """Always ``False`` — the quarter-circle bilge arc re-defers to the
+        sharp chine.
 
-        Spec 009 wired this flag to ``bilge_radius > 0`` and used it to
-        replace the chine corner with a quarter-circle arc via
-        ``Sketcher.fillet()``. The fillet works in isolation but the
-        denser-station + arc combination produces tessellation artifacts
-        (non-manifold edges, self-intersections at the loft transitions)
-        that break the STL export pipeline. The flag is preserved for
-        forward-compatibility but always reports ``False`` in v1.0.3.
-        See spec 009 closure note.
+        Spec 009 wired this flag to ``bilge_radius > 0`` and used it to replace
+        the chine corner with a quarter-circle arc via ``Sketcher.fillet()``.
+        A spec 018 spike re-tested it at the new dense default: the filleted
+        B-rep is a valid single solid (``Solids == 1``, ``isValid()``), but its
+        tessellated mesh is **not watertight**, so STL export fails
+        (``ExportWriteError: mesh is not watertight``) — the spec 009 failure,
+        re-confirmed at n=9 and n=21. Per the spec 018 clarification the arc is
+        kept only if STL stays manifold, so it falls back to the sharp-chine
+        pentagon. The flag is retained as a forward-compat hook but reports
+        ``False``; ``bilge_radius`` and the ``PENTAGON_WITH_ARC`` machinery are
+        preserved for a future FreeCAD that fixes the tessellation.
         """
         _ = self.bilge_radius
         return False
@@ -770,18 +783,17 @@ def _apply_loft_and_mirror(
 ) -> tuple[Any, Any]:
     """Build the PartDesign feature stack: AdditiveLoft + Mirrored.
 
-    Spec 009 implementation reality: the loft uses ``Ruled=True`` for ALL
-    station counts in v1.0.3. The spec called for ``Ruled=False`` (B-spline)
-    at ``station_count >= 8`` but empirical testing in FreeCAD 1.1.1
-    revealed the B-spline interpolation is fundamentally unstable for the
-    Storebro hull profile — overshoots ranged from 22 mm to 1900 mm, and
-    some station counts produced degenerate shapes. The B-spline option
-    is re-deferred to v1.1+ per spec.allium ``deferred Hull.b_spline_loft``.
+    The loft uses ``Ruled=True`` for ALL station counts. ``Ruled=False``
+    (B-spline) is permanently infeasible for the Storebro profile in
+    FreeCAD 1.1.1: a spec 018 spike measured 12-141% beam overshoot across
+    every station-spacing strategy (vs the ±1% bar), while ``Ruled=True`` is
+    exact (0%). See ``HullParameters.uses_b_spline_loft``.
 
-    Visual smoothness in v1.0.3 comes from the denser default station set
-    (9 vs spec 007's 5) plus the quarter-circle bilge arc, not from B-spline
-    interpolation. ``parameters`` is retained in the signature for
-    forward-compatibility with future B-spline support.
+    Visual smoothness comes from station *density* (spec 018: default 31, cap
+    81) under the exact ``Ruled=True`` loft, not from interpolation or the
+    bilge arc (which re-defers to the sharp chine — its mesh is non-watertight;
+    see ``uses_bilge_arc``). ``parameters`` is retained in the signature as a
+    forward-compat hook.
 
     The mirror feature reflects the loft across the Body's XZ plane,
     producing the closed full-hull solid. ``Body.Tip`` is set to the mirror.
