@@ -7,7 +7,30 @@ in the project you want to update.
 
 ## Update project with the latest Claude Code configuration
 
-The template repo is at `/Users/jool/repos/Claude`. Your job: sync THIS project's Claude Code setup against the template repo's latest version.
+The Claude template repo lives on the developer's local machine. **The exact path varies per developer** — Johan's macOS box has it at `/Users/jool/repos/Claude`, David's Linux box at `/home/david/repos/Claude`, others elsewhere. Resolve it once at the top of the run; never hardcode.
+
+### Step -1: Resolve $TEMPLATE (MANDATORY — first thing to do)
+
+Run this probe before reading any template files. It walks the developer's common project roots and stops at the first directory that contains the two files that together unambiguously identify the Claude template:
+
+```bash
+for CAND in "$HOME/repos/Claude" "$HOME/Projects/Claude" "$HOME/Code/Claude" "$HOME/code/Claude" "$HOME/src/Claude" "$HOME/dev/Claude" "/Users/jool/repos/Claude"; do
+  if [ -f "$CAND/CLAUDE.md" ] && [ -f "$CAND/.claude/skills/sync-template/SKILL.md" ]; then
+    TEMPLATE="$CAND"
+    break
+  fi
+done
+
+if [ -z "${TEMPLATE:-}" ]; then
+  echo "[ERROR] Could not locate the Claude template repo on this machine."
+  echo "        Clone it first:"
+  echo "        git clone https://github.com/johanolofsson72/Claude.git \$HOME/repos/Claude"
+  exit 1
+fi
+echo "[OK] Template at: $TEMPLATE"
+```
+
+After this point, **every reference to `/Users/jool/repos/Claude` in this document is an example only** — substitute `$TEMPLATE` when you execute. If you see a literal `/Users/jool/...` path in any command below, treat it as `$TEMPLATE/...` (the same suffix after the `/Claude` segment).
 
 ### Step 0: Version check (MANDATORY — saves tokens)
 
@@ -44,7 +67,7 @@ fi
 
 ### Step 1: Read the template repo
 
-Read the following files from `/Users/jool/repos/Claude` (all are important — do not skip any):
+Read the following files from `$TEMPLATE` (resolved in Step -1; all are important — do not skip any):
 
 **Configuration:**
 - `CLAUDE.md` — main configuration with critical rules and workflow
@@ -59,6 +82,9 @@ Read the following files from `/Users/jool/repos/Claude` (all are important — 
 - `.claude/rules/wordpress.md` — WordPress rules
 - `.claude/rules/allium.md` — Allium spec language rules (paths: `**/*.allium`)
 - `.claude/rules/continuous-execution.md` — forbids phase-splitting stalls ("should I continue with phase 2?"); execute multi-phase plans in one uninterrupted run
+- `.claude/rules/validation-followup.md` — after any Allium/TLA+ run, surface every finding individually for an explicit fix/defer/dismiss decision (no "looks good overall" summaries that bury findings)
+- `.claude/rules/feature-pipeline.md` — mandates the speckit + Allium + TLA+ pipeline for non-trivial work; defines the triage tracks and the PreToolUse state-guard hard block
+- `.claude/rules/spec-register.md` — per-project `specs/INDEX.md` register, one-stop-per-spec execution, SessionStart orientation + PreToolUse bootstrap guard
 - `.claude/rules/project-workflow.md` — gates PR suggestions behind a one-time `AskUserQuestion` (solo vs team + PRs yes/no/sometimes); answer is saved to project memory and silently suppresses PR nagging on solo projects
 - `.claude/rules/sqlite.md` — SQLite-on-NFS pragmas (rollback journal, no `mmap`, `synchronous=FULL`, 30 s `busy_timeout`), single-writer enforcement (`replicas: 1` + `stop-first` + 30 s grace), NFS mount options (`noac`, `actimeo=0`), retry strategy (paths: `**/appsettings*.json`, `**/docker-compose*.yml`, `**/Program.cs`, `**/*Db*.cs`, `**/*Sqlite*.cs`)
 - `.claude/rules/spot-resilience.md` — required components for services on Azure spot workers: eviction watcher (IMDS scheduled events), graceful drain, idempotent writes, outbox pattern, healthcheck split (paths: `**/Program.cs`, `**/docker-compose*.yml`, controllers/endpoints/services/workers)
@@ -76,6 +102,7 @@ Read the following files from `/Users/jool/repos/Claude` (all are important — 
 - `.claude/docs/spot-architecture.md` — three reference architectures for stateful services on an all-spot worker fleet (SQLite on NFS share, LiteFS replicas, managed Postgres) with full compose templates, volume matrix, healthcheck split, and migration path
 - `.claude/docs/stress-testing.md` — mandatory pre-deploy stress testing (k6, Lighthouse)
 - `.claude/docs/project-template.md` — template for project start
+- `.claude/docs/graphify.md` — optional codebase knowledge graph (opt-in per project, install instructions + when/when-not to use)
 
 **Agents (subagents with YAML frontmatter):**
 - `.claude/agents/dotnet-reviewer.md` — code review (isolation: worktree)
@@ -89,6 +116,8 @@ Read the following files from `/Users/jool/repos/Claude` (all are important — 
 - `.claude/skills/deploy-checklist/SKILL.md`
 - `.claude/skills/tla/SKILL.md` — TLA+ formal verification (auto-triggered after browser tests)
 - `.claude/skills/allium/SKILL.md` — Allium spec language skill (/allium:elicit, /allium:distill)
+- `.claude/skills/sync-template/SKILL.md` — the sync skill itself, so the downstream project can re-run `/project-update` later
+- `.claude/skills/update-template/SKILL.md` — keeps the template's own best-practices current (carried along for parity with the sync-template skill list)
 
 **Scripts:**
 
@@ -96,6 +125,7 @@ Read the following files from `/Users/jool/repos/Claude` (all are important — 
 - `scripts/allium-hook.sh` — PostToolUse hook that blocks if spec lacks .allium companion
 - `scripts/tlc-cleanup.sh` — TLC process cleanup (kills orphaned Java/TLC processes after execution)
 - `scripts/test-coverage-hook.sh` — Deterministic functional test coverage enforcement (blocks if tests < inventory items)
+- `scripts/spec-md-coverage-reminder-hook.sh` — Deterministic replacement for the legacy `type:"prompt"` spec-completeness hook. Never blocks (only emits `systemMessage`), detects carve-out phrases ("carved to", "out-of-scope", "deferred to", "tracked in", etc.) and suppresses the destructive-test reminder when tests are explicitly deferred to another slice. Fixes the false-positive blocks observed in projects when slicing specs.
 - `scripts/continuous-execution-hook.sh` — Stop hook backstop: inspects the last assistant message for phase-continuation question patterns ("should I continue with...", "want me to proceed...") and refuses the stop when one is detected. Sentence-aware (only blocks `?` sentences). Requires `python3` and `jq`.
 - `scripts/local-llm-detect.sh` — Sourced helper. Pings Ollama at `${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags` with a 1s timeout and exports `LOCAL_LLM_AVAILABLE` (0/1). Honors `LOCAL_LLM_DISABLE=1` to force-disable. Other local-llm hooks bail out silently when AVAILABLE=0, so the stack is safe to ship to machines without Ollama. Default uses 127.0.0.1 explicitly to avoid Happy-Eyeballs routing to the wrong ollama instance when both IPv4 and IPv6 listeners exist on port 11434.
 - `scripts/local-llm-call.sh` — Generic non-streaming `/api/generate` caller. Reads system prompt as `$1`, user prompt from stdin, num_predict as optional `$2`. Prints model output or exits non-zero on offline/timeout/missing-model.
@@ -180,17 +210,19 @@ These three components work together to ensure destructive browser tests are inc
 
 2. **`.claude/docs/spec-testing-checklist.md`** — concrete template with task structure per attack category. Defines minimum requirements per feature type (8-15 tests). Target: 99% E2E coverage.
 
-3. **PostToolUse prompt-hook in settings.json** — triggers on Edit/Write for spec files and blocks if destructive tests are missing. Verify this hook exists:
+3. **PostToolUse command-hook in settings.json** — triggers on Edit/Write of `.md` files whose path contains spec/tasks/plan/feature; emits an advisory `systemMessage` when an interactive-UI spec is missing FUNCTIONAL COVERAGE or destructive tests. NEVER blocks. Verify this hook exists in this exact form:
    ```json
    {
      "matcher": "Edit|Write",
      "hooks": [{
-       "type": "prompt",
-       "prompt": "A file was just written/edited. Check: if the file path contains spec, tasks, plan, or feature AND is a .md file AND involves UI features, verify it includes destructive browser test scenarios...",
+       "type": "command",
+       "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/spec-md-coverage-reminder-hook.sh\"",
        "statusMessage": "Validating spec completeness..."
      }]
    }
    ```
+
+   **Legacy form to OVERWRITE if found:** earlier versions of the template used a `type:"prompt"` hook with a long prompt containing the phrases `INTERACTIVE UI` and `always approve and use systemMessage for the reminder`. The session LLM was observed overriding the "do not block" instruction and issuing `permissionDecision: deny` on specs that legitimately carved destructive tests to a later slice. If the project's `settings.json` still has that `type:"prompt"` hook, replace the entire hook object with the `type:"command"` form above. The new script (`spec-md-coverage-reminder-hook.sh`) is deterministic, only ever emits `systemMessage`, and detects carve-out phrases ("carved to", "out-of-scope", "deferred to", "tracked in", "see slice N") to suppress false-positive reminders.
 
 If ANY of these three are missing — copy from the template.
 
@@ -245,7 +277,7 @@ After copying scripts, run `chmod +x scripts/local-llm-*.sh scripts/sync-local-l
 **Wire the hooks deterministically** (this is what previously failed under prose-only "merge" rules):
 
 ```bash
-python3 scripts/sync-local-llm-hooks.py /Users/jool/repos/Claude/.claude/settings.json
+python3 scripts/sync-local-llm-hooks.py "$TEMPLATE/.claude/settings.json"
 ```
 
 The script strips every `bash scripts/local-llm-*-hook.sh` entry from the project's `.claude/settings.json` and reinstalls the template's exact set. Non-local-LLM hook entries (project-specific or other template hooks like `tla-hook.sh`, `ui-design-hook.sh`) are preserved verbatim. Idempotent. Capture its stdout for the Step 10 report.
@@ -255,7 +287,7 @@ The script strips every `bash scripts/local-llm-*-hook.sh` entry from the projec
 **Cross-check the trim** (catches the trim's own bugs — e.g. a regex that does not match digits letting `n1-query` slip through):
 
 ```bash
-bash scripts/verify-local-llm-hooks.sh /Users/jool/repos/Claude/.claude/settings.json
+bash scripts/verify-local-llm-hooks.sh "$TEMPLATE/.claude/settings.json"
 ```
 
 Three checks run: (1) the wired set matches the template's exactly, (2) every wired hook has its script file on disk, (3) the count matches the template. Exit non-zero on any failure. **If this fails, the sync is broken — fix it before reporting success in Step 10.** Capture the stdout for the Step 10 report.
@@ -298,6 +330,9 @@ If a developer skips this, every local-llm-* hook detects the missing daemon in 
 | `LOCAL_LLM_CLASSIFY_TIMEOUT` | `4` | Tighter timeout for the prompt-path classifier |
 | `LOCAL_LLM_COMMIT_DIFF_BYTES` | `10000` | Diff cap for commit-draft (raise if you commit huge diffs) |
 | `LOCAL_LLM_COMMIT_DRAFT_TIMEOUT` | `20` | Per-hook timeout for commit-draft (overrides the global) |
+| `LOCAL_LLM_TASKS_DRAFT_TIMEOUT` | `60` | Per-hook timeout for tasks-draft — 1536 num_predict on the spec-aware extraction model regularly exceeds the global 15s. Lower if your local model is fast; raise if you see exit-28 timeouts in `local-llm-fire.log`. |
+| `LOCAL_LLM_PLAN_DRAFT_TIMEOUT` | `60` | Per-hook timeout for plan-draft — same rationale as tasks-draft. |
+| `LOCAL_LLM_ALLIUM_DRIFT_RANK_TIMEOUT` | `45` | Per-hook timeout for allium-drift-rank — ranks drift reports (up to 12KB) with `num_predict=768`. 32b-class models regularly exceed 15s on this. |
 | `LOCAL_LLM_TELEMETRY_LOG` | `<repo>/.claude/local-llm-fire.log` | Per-project log path; auto-detected from `git rev-parse --show-toplevel` |
 | `LOCAL_LLM_TRACE_LOG` | `<repo>/.claude/local-llm-trace.log` | Per-project entry-tracer log |
 | `LOCAL_LLM_TELEMETRY_DISABLE` | unset | Set to `1` to skip telemetry rows |
@@ -323,7 +358,108 @@ grep -c 'local-llm-.*-hook.sh' .claude/settings.json
 grep -E 'bash-tldr|stacktrace|allium-drift|test-(name|assertion|realism|gap)|async-audit|auth-check|linq-perf|n1-query|react-deps|secret-scan|todo-catalog|dockerfile-review|migration-safety|spec-(criteria|scope)|plan-feasibility|task-traceability|allium-openq|branch-name|pr-splitter|tlc-translate|humanize' .claude/settings.json
 ```
 
-If either check fails: re-run `python3 scripts/sync-local-llm-hooks.py /Users/jool/repos/Claude/.claude/settings.json` from the project root.
+If either check fails: re-run `python3 scripts/sync-local-llm-hooks.py "$TEMPLATE/.claude/settings.json"` from the project root.
+
+### Step 5d: Wire and bootstrap Graphify (codebase knowledge graph) — base requirement, deterministic, cross-platform
+
+Graphify (`safishamsi/graphify`, MIT) builds a queryable AST graph of the codebase via tree-sitter — no LLM API key required for extraction. Claude Code queries the graph instead of grepping raw files for structural questions ("where is X defined", "who calls Y", "what connects auth to the database"). The token-savings hook (`scripts/graphify-fire-hook.sh`) logs every `graphify query|path|explain|update` invocation to `.claude/graphify-fire.log` so we can measure ROI per project.
+
+**Graphify is a base requirement, not optional.** For any project that passes the 30-source-file eligibility threshold, this step MUST complete successfully. Projects below the threshold (vanilla HTML demos, single-script repos) skip gracefully because the bootstrap eligibility-gates itself — but on every other repo, Graphify wiring being absent is a sync failure, not a deferred choice.
+
+The historical prose-merge approach for the PostToolUse telemetry entry dropped silently in roughly one project in ten (the juradrop / ighweld-2026 pattern: scripts copied, PreToolUse nudge in place, but the PostToolUse entry missing and the fire log never accumulating). This step is now deterministic: a helper script owns both ends of the wiring + script set, parallel to the local-LLM sync in Step 5c.
+
+**Files to sync from the template:**
+
+1. **`scripts/sync-graphify-wiring.py`** — deterministic settings.json wiring + scripts/ mirror for the Graphify integration. Invoked in Step 5d.1 below.
+2. **`scripts/graphify-bootstrap.sh`** — cross-platform self-installer. Detects `brew`/`apt-get`/`dnf`/`pacman`/`zypper` (Linux/macOS) or `scoop`/`winget`/`choco` (Windows Git Bash); falls back to `python3 -m pip install --user pipx`. Idempotent. Pass `--eligibility-check` for a dry-run source-file count, `--force` to override the 30-file threshold.
+3. **`scripts/graphify-fire-hook.sh`** — PostToolUse Bash hook. Matches `graphify (query|path|explain|update)` invocations and appends a TSV line to `.claude/graphify-fire.log` with timestamp, subcommand, exit, arg bytes, response bytes, graph node count, graph edge count. Disable per-developer with `GRAPHIFY_TELEMETRY_DISABLE=1`.
+4. **`scripts/graphify-stats.sh`** — ROI reporter. Reads the fire log and prints per-subcommand fire counts, ok%, avg arg/response sizes. `--all` aggregates across `~/repos/*` and `~/Projects/*`.
+5. **`.claude/docs/graphify.md`** — reference doc (install instructions, when to use, tuning vars, telemetry).
+
+After copying scripts, `chmod +x scripts/graphify-*.sh scripts/sync-graphify-wiring.py`.
+
+**Step 5d.1 — Wiring (deterministic, run the helper script):**
+
+```bash
+python3 scripts/sync-graphify-wiring.py "$TEMPLATE/.claude/settings.json"
+```
+
+The script does TWO things atomically:
+
+1. **Wiring** — removes every existing graphify-related hook entry from the project's `hooks` block (both the PreToolUse Bash nudge that suggests `graphify query` over grep/rg/find, and the PostToolUse Bash telemetry entry) and replaces them with the template's exact set.
+2. **Scripts on disk** — copies every `scripts/graphify-*.sh` from the template into the project (`graphify-bootstrap.sh`, `graphify-fire-hook.sh`, `graphify-stats.sh`), preserves the executable bit, and deletes any in the project the template no longer ships.
+
+Both wiring entries are universally safe to inject — the PreToolUse nudge guards on `[ -f graphify-out/graph.json ]` and silently no-ops when the graph is missing, and the PostToolUse hook bails out cleanly when the command isn't a `graphify (query|path|explain|update)` invocation. So wiring is decoupled from whether Step 5d.2 has run yet.
+
+Finally it verifies that every wired graphify hook has its script on disk and exits non-zero if anything is off. If Step 5d.1 exits non-zero, do NOT continue — investigate and rerun.
+
+Do NOT try to merge graphify hook entries by hand. The script removes the ambiguity from both ends.
+
+**Step 5d.2 — Bootstrap (cross-platform, actually builds the graph):**
+
+After wiring is in place, run the bootstrap:
+
+```bash
+bash scripts/graphify-bootstrap.sh
+```
+
+The script does its own platform detection. Expected behavior per OS:
+
+| OS / Shell | Package manager preferred | Bootstrap result |
+|---|---|---|
+| **macOS (zsh/bash)** | `brew` → `pip --user` | Installs pipx via brew, then graphifyy via pipx |
+| **Linux Debian/Ubuntu (bash)** | `apt-get` → `pip --user` | Installs pipx via apt, then graphifyy via pipx. `sudo` prompt expected. |
+| **Linux Fedora/RHEL (bash)** | `dnf` → `pip --user` | Installs pipx via dnf, then graphifyy via pipx. `sudo` prompt expected. |
+| **Linux Arch (bash)** | `pacman` → `pip --user` | Installs `python-pipx` via pacman, then graphifyy via pipx. `sudo` prompt expected. |
+| **Linux openSUSE (bash)** | `zypper` → `pip --user` | Installs `python3-pipx`, then graphifyy via pipx. |
+| **Windows Git Bash** | `scoop` → `winget` → `choco` → `pip --user` | Installs pipx via scoop (preferred — no UAC) or winget/choco, then graphifyy via pipx. Add `$HOME/.local/bin` to PATH if not present. |
+| **Windows WSL2** | Same as Linux variant of the WSL distro | Same as native Linux. |
+| **Windows PowerShell (native)** | NOT supported by `graphify-bootstrap.sh` directly | Run the script via Git Bash (recommended) or WSL. A native PowerShell sibling (`scripts/graphify-bootstrap.ps1`) is on the template TODO list. |
+
+**If the bootstrap fails:**
+
+Don't silently proceed. The script exits 1 with a specific message naming what's missing (no package manager, pipx install failed, graphify install failed). Capture the error in the Step 10 report and tell the developer to install pipx manually:
+
+- macOS: `brew install pipx && pipx ensurepath`
+- Debian/Ubuntu: `sudo apt install pipx && pipx ensurepath`
+- Fedora/RHEL: `sudo dnf install pipx && pipx ensurepath`
+- Arch: `sudo pacman -S python-pipx && pipx ensurepath`
+- Windows Git Bash: `scoop install pipx` or `winget install pipx`
+
+Then re-run `bash scripts/graphify-bootstrap.sh`.
+
+**Tuning** (optional, in shell profile or `.envrc`):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GRAPHIFY_TELEMETRY_DISABLE` | unset | Set to `1` to skip writing rows to `graphify-fire.log` (script still runs, exits silently) |
+| `GRAPHIFY_TELEMETRY_LOG` | `<repo>/.claude/graphify-fire.log` | Per-project log path |
+| `GRAPHIFY_VIZ_NODE_LIMIT` | `5000` | Skip `graph.html` viz above this node count (graphify's own var) |
+
+**Gitignore additions** (the bootstrap script adds these automatically, but verify):
+
+```
+graphify-out/
+.claude/graphify-*.log
+```
+
+**Verification:**
+
+```bash
+# graphify CLI on PATH
+command -v graphify && graphify --version
+
+# Initial graph exists
+test -f graphify-out/graph.json && echo "[OK] graph.json present"
+
+# Fire-hook script on disk and executable
+test -x scripts/graphify-fire-hook.sh && echo "[OK] graphify-fire-hook.sh executable"
+
+# Hook wired in settings.json
+grep -q 'graphify-fire-hook.sh' .claude/settings.json && echo "[OK] telemetry hook wired"
+```
+
+If any of these fail: re-run `bash scripts/graphify-bootstrap.sh`. The script is idempotent and will skip steps that are already complete.
 
 ### Step 6: Install required skills
 
@@ -512,6 +648,11 @@ After syncing:
 - Normalize hook script paths so they survive a cwd change (`python3 scripts/fix-hook-paths.py .claude/settings.json`). Hook commands must reference scripts as `bash "$CLAUDE_PROJECT_DIR/scripts/foo.sh"`, never `bash scripts/foo.sh` — the relative form silently breaks when `claude` is started from a subdirectory. The patcher is idempotent and exits non-zero on JSON parse failure.
 - Verify that `settings.json` is valid JSON (`python3 -m json.tool .claude/settings.json`)
 - Verify that the reference files section in CLAUDE.md points to files that actually exist
+- **Verify Graphify wiring for eligible projects.** Run the exit-condition snippet from Step 5d.2:
+  ```bash
+  command -v graphify > /dev/null && test -f graphify-out/graph.json && test -x scripts/graphify-fire-hook.sh && grep -q 'graphify-fire-hook.sh' .claude/settings.json && echo "[OK] graphify wired" || echo "[FAIL/SKIP] graphify not wired"
+  ```
+  If the project passed the 30-source-file eligibility threshold in Step 5d.2 and this prints `[FAIL/SKIP]`, the sync is incomplete — inspect which check failed (graphify CLI not on PATH → re-run bootstrap, missing graph.json → re-run `graphify update .`, missing script → re-run `sync-graphify-wiring.py`, missing settings.json entry → re-run `sync-graphify-wiring.py`) and rerun the relevant step. For sub-threshold projects (vanilla HTML demos), `[FAIL/SKIP]` is expected and not an error.
 
 ### Step 8b: Record sync version (MANDATORY)
 

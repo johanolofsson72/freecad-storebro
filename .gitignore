@@ -55,3 +55,7 @@ graphify-out/
 # Graphify telemetry — per-developer ephemeral
 .claude/graphify-*.log
 .claude/graphify-*.log.errors
+*.db
+temp/
+.env
+appsettings.Development.json
