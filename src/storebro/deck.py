@@ -925,11 +925,17 @@ class CabinWindowParameters:
     corner_radius: float = 80.0
     recess_depth: float = 15.0
     sill_height: float = 0.0
+    glass_panes: bool = True  # spec 019: translucent pane seated in the recess
+    glass_thickness: float = 6.0
 
     def __post_init__(self) -> None:
         if self.count_per_side < 0:
             raise DeckParameterError(
                 "cabin_window_count_per_side", self.count_per_side, ">= 0"
+            )
+        if self.glass_thickness <= 0:
+            raise DeckParameterError(
+                "cabin_window_glass_thickness", self.glass_thickness, "> 0"
             )
         for name, value in (
             ("cabin_window_length", self.length),
@@ -1029,11 +1035,17 @@ class DsWindowParameters:
     length: float = 1000.0
     height: float = 500.0
     recess_depth: float = 15.0
+    glass_panes: bool = True  # spec 019: translucent pane seated in the recess
+    glass_thickness: float = 6.0
 
     def __post_init__(self) -> None:
         if self.count_per_side < 0:
             raise DeckParameterError(
                 "ds_window_count_per_side", self.count_per_side, ">= 0"
+            )
+        if self.glass_thickness <= 0:
+            raise DeckParameterError(
+                "ds_window_glass_thickness", self.glass_thickness, "> 0"
             )
         for name, value in (
             ("ds_window_length", self.length),
@@ -1973,7 +1985,7 @@ def _cut_cabin_windows(
     glazing: DeckGlazingParameters,
     target_doc: Any,
     added: list[Any],
-) -> CabinWindows:
+) -> tuple[CabinWindows, list[Any]]:
     """Cut blind side-window recesses into the cabin trunk (spec 011 FR-002).
 
     Per side, a rectangular `PartDesign::Pocket` of depth ``recess_depth`` into
@@ -1989,8 +2001,9 @@ def _cut_cabin_windows(
 
     cw = glazing.cabin_windows
     body = cabin_trunk.body
+    glass_bodies: list[Any] = []
     if cw.count_per_side == 0:
-        return CabinWindows(body=body, count=0)
+        return (CabinWindows(body=body, count=0), glass_bodies)
 
     bb = body.Shape.BoundBox
     half_width = bb.YLength / 2.0
@@ -2065,7 +2078,77 @@ def _cut_cabin_windows(
             pocket.Reversed = sign > 0.0  # cut toward the centerline
             pocket.Midplane = False
 
-    return CabinWindows(body=body, count=count)
+            if cw.glass_panes:
+                glass_bodies.append(
+                    _build_window_glass(
+                        target_doc,
+                        f"Deck_CabinWindowGlass{side}{count}",
+                        x_mm,
+                        cz,
+                        sign * (outer_y - cw.recess_depth * 0.5),
+                        half_l,
+                        half_h,
+                        cw.glass_thickness,
+                        added,
+                    )
+                )
+
+    return (CabinWindows(body=body, count=count), glass_bodies)
+
+
+def _build_window_glass(
+    target_doc: Any,
+    name: str,
+    x_mm: float,
+    cz_mm: float,
+    inset_y_mm: float,
+    half_l_mm: float,
+    half_h_mm: float,
+    thickness_mm: float,
+    added: list[Any],
+) -> Any:
+    """Build one translucent rectangular glass-pane Body seated in a window recess.
+
+    spec 019: a separate additive ``PartDesign::Body`` (never a boolean on the
+    host trunk/deckhouse), centred at global ``(x_mm, inset_y_mm, cz_mm)`` on an
+    XZ-parallel datum (normal = global Y), X-thin by ``thickness_mm``. Returns
+    the glass Body. Mirrors the windshield-glass / porthole-glass idiom.
+    """
+    import FreeCAD
+    import Part
+
+    g_body = target_doc.addObject("PartDesign::Body", name)
+    added.append(g_body)
+    target_doc.recompute()
+    g_xz = _pd_get_origin_plane(g_body, "XZ_Plane")
+    g_datum = g_body.newObject("PartDesign::Plane", f"{name}Datum")
+    added.append(g_datum)
+    g_datum.AttachmentSupport = [(g_xz, "")]
+    g_datum.MapMode = "FlatFace"
+    g_datum.AttachmentOffset = FreeCAD.Placement(
+        FreeCAD.Vector(x_mm, cz_mm, inset_y_mm), FreeCAD.Rotation()
+    )
+    g_sketch = g_body.newObject("Sketcher::SketchObject", f"{name}Sketch")
+    added.append(g_sketch)
+    g_sketch.AttachmentSupport = [(g_datum, "")]
+    g_sketch.MapMode = "FlatFace"
+    pts = [
+        FreeCAD.Vector(-half_l_mm, -half_h_mm, 0),
+        FreeCAD.Vector(half_l_mm, -half_h_mm, 0),
+        FreeCAD.Vector(half_l_mm, half_h_mm, 0),
+        FreeCAD.Vector(-half_l_mm, half_h_mm, 0),
+    ]
+    line_ids: list[int] = []
+    for i in range(4):
+        j = (i + 1) % 4
+        line_ids.append(g_sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+    _pd_close_loop_constraints(g_sketch, line_ids)
+    g_pad = g_body.newObject("PartDesign::Pad", f"{name}Pad")
+    added.append(g_pad)
+    g_pad.Profile = (g_sketch, [""])
+    g_pad.Length = thickness_mm
+    g_pad.Midplane = True
+    return g_body
 
 
 def _assert_solid_manifold(body: Any, label: str) -> None:
@@ -3143,7 +3226,7 @@ def _cut_deckhouse_windows(
     win: DsWindowParameters,
     target_doc: Any,
     added: list[Any],
-) -> Deckhouse:
+) -> tuple[Deckhouse, list[Any]]:
     """Cut blind wraparound side-window recesses into the deckhouse (spec 016 FR-006).
 
     Mirrors :func:`_cut_cabin_windows`: ``count_per_side`` rectangular
@@ -3161,8 +3244,9 @@ def _cut_deckhouse_windows(
     import Part
 
     body = deckhouse.body
+    glass_bodies: list[Any] = []
     if win.count_per_side == 0:
-        return deckhouse
+        return (deckhouse, glass_bodies)
 
     bb = body.Shape.BoundBox
     half_width = bb.YLength / 2.0
@@ -3232,13 +3316,31 @@ def _cut_deckhouse_windows(
             pocket.Reversed = sign > 0.0  # cut toward the centerline
             pocket.Midplane = False
 
-    return Deckhouse(
-        body=body,
-        length=deckhouse.length,
-        forward_width=deckhouse.forward_width,
-        aft_width=deckhouse.aft_width,
-        height=deckhouse.height,
-        window_count=count,
+            if win.glass_panes:
+                glass_bodies.append(
+                    _build_window_glass(
+                        target_doc,
+                        f"Deck_DeckhouseWindowGlass{side}{count}",
+                        x_mm,
+                        cz,
+                        sign * (outer_y - win.recess_depth * 0.5),
+                        half_l,
+                        half_h,
+                        win.glass_thickness,
+                        added,
+                    )
+                )
+
+    return (
+        Deckhouse(
+            body=body,
+            length=deckhouse.length,
+            forward_width=deckhouse.forward_width,
+            aft_width=deckhouse.aft_width,
+            height=deckhouse.height,
+            window_count=count,
+        ),
+        glass_bodies,
     )
 
 
@@ -3382,13 +3484,17 @@ def build_deck(
     hardtop_pillars: HardtopPillars | None = None
     cabin_windows: CabinWindows | None = None
     deckhouse: Deckhouse | None = None
+    _window_glass: list[Any] = []  # spec 019 translucent panes (cabin + DS windows)
     try:
         deck_plate = _build_deck_plate(hull, resolved_params, target_doc, added)
         if superstructure_variant == "ds":
             # Enclosed DS deck saloon: one filled deckhouse solid replaces the
             # cabin trunk + windshield + hardtop + pillars.
             deckhouse = _build_deckhouse(hull, deck_plate, dh, target_doc, added)
-            deckhouse = _cut_deckhouse_windows(deckhouse, dh.windows, target_doc, added)
+            deckhouse, _deckhouse_glass = _cut_deckhouse_windows(
+                deckhouse, dh.windows, target_doc, added
+            )
+            _window_glass.extend(_deckhouse_glass)
             railings = _build_railings(
                 hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
             )
@@ -3470,7 +3576,10 @@ def build_deck(
 
             # Spec 011 — cabin-trunk side windows (cut last, after every consumer
             # of the trunk geometry has read it), then the manifold guards (FR-008).
-            cabin_windows = _cut_cabin_windows(cabin_trunk, glz, target_doc, added)
+            cabin_windows, _cabin_glass = _cut_cabin_windows(
+                cabin_trunk, glz, target_doc, added
+            )
+            _window_glass.extend(_cabin_glass)
             target_doc.recompute()
             _assert_solid_manifold(cabin_trunk.body, "cabin trunk")
             if glz.windshield.enabled:
@@ -3518,6 +3627,7 @@ def build_deck(
         _render_targets.append(hardtop.body)
     if hardtop_pillars is not None:
         _render_targets.append(hardtop_pillars.body)
+    _render_targets.extend(_window_glass)  # spec 019 translucent window panes
     _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started

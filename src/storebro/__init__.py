@@ -94,7 +94,7 @@ from storebro.render import (
     role_for_label,
 )
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 __all__ = [
     "PALETTE",

@@ -99,6 +99,9 @@ PALETTE: dict[str, RenderAttribute] = {
 # top-level label; compartment compounds resolve to trim (teak joinery).
 _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Deck_WindshieldGlass", "glass"),
+    ("Deck_CabinWindowGlass", "glass"),
+    ("Deck_DeckhouseWindowGlass", "glass"),
+    ("Hull_PortholeGlass", "glass"),
     ("Deck_Windshield", "frame"),
     ("Deck_Rubrail", "trim"),
     ("Deck_Railings", "metal"),

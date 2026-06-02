@@ -1,0 +1,102 @@
+-- allium: 3
+--
+-- Spec 019 — window-glass-panes — ELICITED from spec.md
+--
+-- Translucent glass-pane bodies seated in the existing blind recesses
+-- (portholes, cabin-trunk windows, DS deckhouse windows). Panes are additive
+-- bodies (no boolean on the host), so the host solids stay manifold by
+-- construction. Reuses the spec 015 `glass` palette role.
+
+config {
+    manifold_solids_count: Integer = 1
+    glass_role: String = `glass`
+}
+
+external entity HullBody {
+    porthole_count: Integer
+    solids_count: Integer
+}
+
+external entity CabinTrunkBody {
+    window_count: Integer
+    solids_count: Integer
+}
+
+external entity DeckhouseBody {
+    window_count: Integer
+    solids_count: Integer
+}
+
+-- One translucent additive pane seated in a recess.
+entity GlassPane {
+    shape: circular | rectangular
+    solids_count: Integer
+    is_valid: Boolean
+    inset_within_recess: Boolean
+    render_role: String
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    -- FR-006: thinner than + positioned at the recess, never protruding.
+    invariant InsetWithinRecess { this.inset_within_recess = true }
+}
+
+-- FR-001: a circular pane per porthole.
+rule GlazePortholes {
+    when: BuildHullGlazing(hull, enabled)
+    requires: enabled = true
+    ensures:
+        for i in hull.porthole_count:
+            GlassPane.created(shape: circular, solids_count: 1, is_valid: true, inset_within_recess: true)
+        -- FR-005: the host solid is untouched.
+        hull.solids_count = 1
+}
+
+-- FR-002: a rectangular pane per cabin-trunk window.
+rule GlazeCabinWindows {
+    when: BuildDeckGlazing(trunk, enabled)
+    requires: enabled = true
+    ensures:
+        for i in trunk.window_count:
+            GlassPane.created(shape: rectangular, solids_count: 1, is_valid: true, inset_within_recess: true)
+        trunk.solids_count = 1
+}
+
+-- FR-003: a rectangular pane per DS deckhouse window.
+rule GlazeDeckhouseWindows {
+    when: BuildDeckhouseGlazing(house, enabled)
+    requires: enabled = true
+    ensures:
+        for i in house.window_count:
+            GlassPane.created(shape: rectangular, solids_count: 1, is_valid: true, inset_within_recess: true)
+        house.solids_count = 1
+}
+
+-- FR-007: panes opt out; with panes off the host is unchanged.
+rule SkipPanesWhenDisabled {
+    when: BuildHullGlazing(hull, enabled)
+    requires: enabled = false
+    ensures: hull.solids_count = 1
+}
+
+-- FR-010: failure rolls back panes with the host build.
+rule RollbackOnFailure {
+    when: FreecadFailure(stage)
+    requires: stage = glazing_build
+    ensures:
+        ConstructionErrorRaised()
+        DocumentRestoredToPreCallState()
+}
+
+-- FR-004/FR-005: every host solid stays single + manifold regardless of panes.
+invariant HostSolidsStayManifold {
+    for h in HullBody: h.solids_count = 1
+    for t in CabinTrunkBody: t.solids_count = 1
+    for d in DeckhouseBody: d.solids_count = 1
+}
+
+actor Builder { identified_by: HullBody }
+
+-- FR-008: deferred (Sketcher-fillet non-watertight risk, spec 018 evidence).
+deferred GlassPane.rounded_corner_geometry
+deferred GlassPane.mullions_and_sliding_tracks

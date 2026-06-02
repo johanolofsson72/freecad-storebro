@@ -944,13 +944,23 @@ class HullGlazingParameters:
 
     The optional ``parameters_glazing`` entry point for :func:`build_hull`.
 
+    spec 019 adds translucent glass panes seated in the porthole recesses,
+    on by default. ``glass_panes`` is the opt-out; ``glass_thickness`` is the
+    pane thickness in mm.
+
     Example:
         >>> p = HullGlazingParameters()
-        >>> p.portholes.count_per_side
-        3
+        >>> p.portholes.count_per_side, p.glass_panes
+        (3, True)
     """
 
     portholes: PortholeParameters = field(default_factory=PortholeParameters)
+    glass_panes: bool = True
+    glass_thickness: float = 6.0
+
+    def __post_init__(self) -> None:
+        if self.glass_thickness <= 0:
+            raise HullParameterError("hull_glass_thickness", self.glass_thickness, "> 0")
 
 
 @dataclass(frozen=True)
@@ -1046,21 +1056,24 @@ def _cut_portholes(
     hull_params: HullParameters,
     glazing: HullGlazingParameters,
     added: list[Any],
-) -> Porthole:
+) -> tuple[Porthole, list[Any]]:
     """Cut the porthole recesses into the hull body (FR-001, FR-007).
 
-    Returns a :class:`Porthole` wrapper. Zero-count → no cuts (FR-011).
-    Raises :class:`HullParameterError` for a recess that would reach the far
-    side, a porthole at/below the waterline, or a diameter exceeding the local
-    freeboard (data-model §6).
+    Returns ``(Porthole, glass_bodies)`` — the wrapper plus the list of
+    translucent glass-pane Bodies seated in the recesses (spec 019; empty when
+    glazing.glass_panes is False or count is zero). Zero-count → no cuts
+    (FR-011). Raises :class:`HullParameterError` for a recess that would reach
+    the far side, a porthole at/below the waterline, or a diameter exceeding the
+    local freeboard (data-model §6).
     """
     import FreeCAD
     import Part
 
     pp = glazing.portholes
     loa_mm = hull_params.loa * _MM_PER_M
+    glass_bodies: list[Any] = []
     if pp.count_per_side == 0:
-        return Porthole(body=body, count=0, diameter=pp.diameter / _MM_PER_M)
+        return (Porthole(body=body, count=0, diameter=pp.diameter / _MM_PER_M), glass_bodies)
 
     # Derive the longitudinal span (sentinel 0/0 → the accommodation region,
     # 30%..70% of LOA) and the vertical centre (sentinel 0 → upper topside at
@@ -1134,10 +1147,49 @@ def _cut_portholes(
             pocket.Reversed = sign > 0.0  # cut toward the centerline
             pocket.Midplane = False
 
-    return Porthole(
-        body=body,
-        count=pp.count_per_side * 2,
-        diameter=pp.diameter / _MM_PER_M,
+            # spec 019 — a translucent glass disc seated in the recess: a
+            # separate additive Body (never a boolean on the hull), so the hull
+            # solid stays manifold. Centred a touch inboard of the outer
+            # surface, X-thin along the local normal (global Y).
+            if glazing.glass_panes:
+                inset = sign * (outer_y - pp.recess_depth * 0.5)
+                g_body = body.Document.addObject(
+                    "PartDesign::Body", f"Hull_PortholeGlass{side}{seq}"
+                )
+                added.append(g_body)
+                body.Document.recompute()
+                g_xz = _get_origin_plane(g_body, "XZ_Plane")
+                g_datum = g_body.newObject("PartDesign::Plane", f"PortholeGlassDatum{side}{seq}")
+                added.append(g_datum)
+                g_datum.AttachmentSupport = [(g_xz, "")]
+                g_datum.MapMode = "FlatFace"
+                g_datum.AttachmentOffset = FreeCAD.Placement(
+                    FreeCAD.Vector(x_mm, 0.0, inset), FreeCAD.Rotation()
+                )
+                g_sketch = g_body.newObject(
+                    "Sketcher::SketchObject", f"PortholeGlassSketch{side}{seq}"
+                )
+                added.append(g_sketch)
+                g_sketch.AttachmentSupport = [(g_datum, "")]
+                g_sketch.MapMode = "FlatFace"
+                g_circle = Part.Circle(
+                    FreeCAD.Vector(x_mm, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
+                )
+                g_sketch.addGeometry(g_circle.toShape().Curve, False)
+                g_pad = g_body.newObject("PartDesign::Pad", f"PortholeGlassPad{side}{seq}")
+                added.append(g_pad)
+                g_pad.Profile = (g_sketch, [""])
+                g_pad.Length = glazing.glass_thickness
+                g_pad.Midplane = True
+                glass_bodies.append(g_body)
+
+    return (
+        Porthole(
+            body=body,
+            count=pp.count_per_side * 2,
+            diameter=pp.diameter / _MM_PER_M,
+        ),
+        glass_bodies,
     )
 
 
@@ -1255,7 +1307,7 @@ def build_hull(
 
         # spec 011 — cut porthole recesses after the mirror, then assert the
         # hull is still a single closed solid (FR-008 non-manifold guard).
-        portholes = _cut_portholes(body, resolved_params, glazing, added)
+        portholes, porthole_glass = _cut_portholes(body, resolved_params, glazing, added)
         target_doc.recompute()
         _assert_hull_manifold(body, resolved_params)
     except HullParameterError:
@@ -1287,7 +1339,7 @@ def build_hull(
     # geometry is already committed, so this is outside the rollback try-block.
     from storebro.render import apply_render_attributes as _apply_render_attributes
 
-    _apply_render_attributes([body], enabled=apply_render_attributes)
+    _apply_render_attributes([body, *porthole_glass], enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
     return Hull(

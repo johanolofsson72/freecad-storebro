@@ -4,6 +4,25 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-02
+
+Spec 019 — window glass panes. The recessed windows now read as glass. Every
+porthole, cabin-trunk side window, and DS deckhouse side window gets a thin
+translucent pane seated in its recess, coloured by the existing glass material;
+the windshield already had its pane. Panes are separate additive bodies — they
+are never booleaned into the hull, cabin trunk, or deckhouse — so those solids
+stay watertight and STL export is unaffected. Panes are on by default with a
+per-call opt-out. Rounded window corners stay deferred: the Sketcher fillet
+carries the non-watertight-mesh risk that spec 018's bilge arc proved.
+
+### Added
+
+- Translucent glass-pane bodies for portholes (`Hull_PortholeGlass*`),
+  cabin-trunk side windows (`Deck_CabinWindowGlass*`), and DS deckhouse windows
+  (`Deck_DeckhouseWindowGlass*`), each resolving to the `glass` render role.
+- `glass_panes` (opt-out, default on) and `glass_thickness` fields on
+  `HullGlazingParameters`, `CabinWindowParameters`, and `DsWindowParameters`.
+
 ## [1.4.0] - 2026-06-02
 
 Spec 018 — hull surface curvature v2. The default hull now reads as a smooth
