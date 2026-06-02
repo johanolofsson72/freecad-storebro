@@ -185,7 +185,7 @@ Read these files WHEN you need them — do not load everything upfront:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/015-render-attributes/plan.md`.
+at `specs/017-interior-scale-fix/plan.md`.
 <!-- SPECKIT END -->
 
 ## graphify

@@ -149,6 +149,12 @@ _CANONICAL_LAYOUT_NAMES: frozenset[str] = frozenset(
     {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}
 )
 _OVERLAP_THRESHOLD_M3 = 1.0e-6
+# spec 017: single metre→millimetre conversion authority for the geometry-
+# construction boundary. Layouts/fixtures are authored in metres; FreeCAD's
+# internal length unit is millimetres. Every coordinate handed to Part/Vector
+# is multiplied by this constant, exactly as the hull module does with
+# `hull._MM_PER_M`. Validation stays in metre-space and does NOT use it.
+_M_TO_MM = 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -816,13 +822,17 @@ def _build_compartment(
     import FreeCAD
     import Part
 
-    half_w = spec.dimensions.width / 2.0
+    half_w = spec.dimensions.width / 2.0 * _M_TO_MM
     box = Part.makeBox(
-        spec.dimensions.length,
-        spec.dimensions.width,
-        spec.dimensions.height,
+        spec.dimensions.length * _M_TO_MM,
+        spec.dimensions.width * _M_TO_MM,
+        spec.dimensions.height * _M_TO_MM,
     )
-    box.translate(FreeCAD.Vector(spec.position.x, -half_w, spec.position.z))
+    box.translate(
+        FreeCAD.Vector(
+            spec.position.x * _M_TO_MM, -half_w, spec.position.z * _M_TO_MM
+        )
+    )
 
     label = _compartment_label(spec, layout_name)
     obj = target_doc.addObject("Part::Feature", label)
@@ -843,14 +853,13 @@ def _build_compartment(
 # ---------------------------------------------------------------------------
 # Spec 012 — furniture builders (Part::Feature B-rep, matching _build_compartment)
 #
-# The interior module's coordinate convention (spec 004): compartment
-# dimensions/positions are used directly as meter-magnitude values in
-# Part.makeBox. Furniture parameters are in mm, so they are converted to the
-# same magnitude via _MM_TO_UNIT before use, keeping furniture consistent in
-# scale with the compartment boxes.
+# Coordinate convention (spec 017): geometry is built at millimetre scale, the
+# FreeCAD internal unit, consistent with the hull. Furniture parameters are
+# already in mm and are used at face value; layout values derived from the
+# spec (metre-space) are converted via `_M_TO_MM`; fixed real-world
+# measurements embedded below are written at millimetre scale.
 # ---------------------------------------------------------------------------
 
-_MM_TO_UNIT = 1.0 / 1000.0
 # spec 013: furniture now applies to all five canonical layouts (spec 012
 # enabled Alt1/Alt2). Reuse _CANONICAL_LAYOUT_NAMES so the two cannot drift.
 # Custom (non-canonical) YAML layouts keep boxy placeholders. The per-type
@@ -859,7 +868,7 @@ _FURNISHED_LAYOUTS: frozenset[str] = _CANONICAL_LAYOUT_NAMES
 
 
 def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[float, float, float]) -> Any:
-    """Make a Part::Feature box at `origin` with `size` (meter-magnitude units)."""
+    """Make a Part::Feature box at `origin` with `size` (millimetre-magnitude units)."""
     import Part
 
     dx, dy, dz = size
@@ -875,12 +884,14 @@ def _validate_furniture_envelope(
     spec: CompartmentSpec, furniture: FurnitureParameters, source: str
 ) -> None:
     """Reject furniture taller than its compartment (FR-006)."""
+    # Validation stays in metre-space: compartment height `h` is in metres, so
+    # furniture heights (mm) are converted down via `/ _M_TO_MM` for comparison.
     h = spec.dimensions.height
-    if spec.compartment_type == "forward_cabin" and furniture.berth.base_height * _MM_TO_UNIT >= h:
+    if spec.compartment_type == "forward_cabin" and furniture.berth.base_height / _M_TO_MM >= h:
         raise InteriorParameterError(
             source, spec.name, "berth_base_height", "must be less than compartment height"
         )
-    if spec.compartment_type == "galley" and furniture.galley.counter_height * _MM_TO_UNIT >= h:
+    if spec.compartment_type == "galley" and furniture.galley.counter_height / _M_TO_MM >= h:
         raise InteriorParameterError(
             source, spec.name, "galley_counter_height", "must be less than compartment height"
         )
@@ -892,13 +903,13 @@ def _build_berth(
     """forward_cabin → a berth base box + cushion box(es) on top."""
     import FreeCAD
 
-    inset = params.wall_inset * _MM_TO_UNIT
-    base_h = params.base_height * _MM_TO_UNIT
-    cush_t = params.cushion_thickness * _MM_TO_UNIT
-    length = spec.dimensions.length - 2 * inset
-    width = spec.dimensions.width - 2 * inset
-    x0 = spec.position.x + inset
-    z0 = spec.position.z
+    inset = params.wall_inset
+    base_h = params.base_height
+    cush_t = params.cushion_thickness
+    length = spec.dimensions.length * _M_TO_MM - 2 * inset
+    width = spec.dimensions.width * _M_TO_MM - 2 * inset
+    x0 = spec.position.x * _M_TO_MM + inset
+    z0 = spec.position.z * _M_TO_MM
     bodies = [
         _box(
             target_doc, added, f"{label}_Berth",
@@ -922,19 +933,19 @@ def _build_galley_counter(
     import FreeCAD
     import Part
 
-    inset = 0.05
-    counter_h = params.counter_height * _MM_TO_UNIT
-    thick = params.counter_thickness * _MM_TO_UNIT
-    length = spec.dimensions.length - 2 * inset
-    width = spec.dimensions.width - 2 * inset
-    x0 = spec.position.x + inset
-    z0 = spec.position.z + counter_h - thick
+    inset = 0.05 * _M_TO_MM
+    counter_h = params.counter_height
+    thick = params.counter_thickness
+    length = spec.dimensions.length * _M_TO_MM - 2 * inset
+    width = spec.dimensions.width * _M_TO_MM - 2 * inset
+    x0 = spec.position.x * _M_TO_MM + inset
+    z0 = spec.position.z * _M_TO_MM + counter_h - thick
     counter = Part.makeBox(length, width, thick)
     counter.translate(FreeCAD.Vector(x0, -width / 2.0, z0))
 
     if params.cutouts_enabled:
-        sink_d = params.sink_recess_depth * _MM_TO_UNIT
-        stove_d = params.stove_recess_depth * _MM_TO_UNIT
+        sink_d = params.sink_recess_depth
+        stove_d = params.stove_recess_depth
         cut_l, cut_w = length * 0.25, width * 0.4
         top_z = z0 + thick
         # Sink recess in the forward quarter; stove recess in the aft quarter.
@@ -956,21 +967,22 @@ def _build_head_fittings(
     """head → a toilet box + a sink box against the walls."""
     import FreeCAD
 
-    toilet_h = params.toilet_height * _MM_TO_UNIT
-    sink_h = params.sink_height * _MM_TO_UNIT
-    tl, tw = 0.5, 0.4
-    sl, sw, st = 0.4, 0.3, 0.15
-    x0, z0 = spec.position.x, spec.position.z
-    aft_x = spec.position.x + spec.dimensions.length
-    half_w = spec.dimensions.width / 2.0
+    toilet_h = params.toilet_height
+    sink_h = params.sink_height
+    tl, tw = 0.5 * _M_TO_MM, 0.4 * _M_TO_MM
+    sl, sw, st = 0.4 * _M_TO_MM, 0.3 * _M_TO_MM, 0.15 * _M_TO_MM
+    x0, z0 = spec.position.x * _M_TO_MM, spec.position.z * _M_TO_MM
+    aft_x = (spec.position.x + spec.dimensions.length) * _M_TO_MM
+    half_w = spec.dimensions.width / 2.0 * _M_TO_MM
+    wall_gap = 0.1 * _M_TO_MM
     return [
         _box(
             target_doc, added, f"{label}_Toilet",
-            FreeCAD.Vector(x0 + 0.1, -tw / 2.0, z0), (tl, tw, toilet_h),
+            FreeCAD.Vector(x0 + wall_gap, -tw / 2.0, z0), (tl, tw, toilet_h),
         ),
         _box(
             target_doc, added, f"{label}_Sink",
-            FreeCAD.Vector(aft_x - 0.1 - sl, half_w - sw, z0 + sink_h - st), (sl, sw, st),
+            FreeCAD.Vector(aft_x - wall_gap - sl, half_w - sw, z0 + sink_h - st), (sl, sw, st),
         ),
     ]
 
@@ -981,17 +993,20 @@ def _build_salon_furniture(
     """salon → a settee box + a table (top + pedestal)."""
     import FreeCAD
 
-    seat_h = params.seat_height * _MM_TO_UNIT
-    table_h = params.table_height * _MM_TO_UNIT
-    x0, z0 = spec.position.x, spec.position.z
-    width = spec.dimensions.width
-    length = spec.dimensions.length
-    settee_d = 0.5
+    seat_h = params.seat_height
+    table_h = params.table_height
+    x0, z0 = spec.position.x * _M_TO_MM, spec.position.z * _M_TO_MM
+    width = spec.dimensions.width * _M_TO_MM
+    length = spec.dimensions.length * _M_TO_MM
+    end_gap = 0.1 * _M_TO_MM
+    side_gap = 0.05 * _M_TO_MM
+    settee_d = 0.5 * _M_TO_MM
     settee = _box(
         target_doc, added, f"{label}_Settee",
-        FreeCAD.Vector(x0 + 0.1, -width / 2.0 + 0.05, z0), (length - 0.2, settee_d, seat_h),
+        FreeCAD.Vector(x0 + end_gap, -width / 2.0 + side_gap, z0),
+        (length - 2 * end_gap, settee_d, seat_h),
     )
-    table_top_t = 0.04
+    table_top_t = 0.04 * _M_TO_MM
     table_l, table_w = length * 0.4, width * 0.4
     cx = x0 + length / 2.0
     table_top = _box(
@@ -999,9 +1014,12 @@ def _build_salon_furniture(
         FreeCAD.Vector(cx - table_l / 2.0, -table_w / 2.0, z0 + table_h - table_top_t),
         (table_l, table_w, table_top_t),
     )
+    half_ped = 0.04 * _M_TO_MM
+    ped_side = 0.08 * _M_TO_MM
     pedestal = _box(
         target_doc, added, f"{label}_TablePedestal",
-        FreeCAD.Vector(cx - 0.04, -0.04, z0), (0.08, 0.08, table_h - table_top_t),
+        FreeCAD.Vector(cx - half_ped, -half_ped, z0),
+        (ped_side, ped_side, table_h - table_top_t),
     )
     return [settee, table_top, pedestal]
 
@@ -1012,13 +1030,13 @@ def _build_bulkhead(
     """A thin partition box at the compartment's aft boundary."""
     import FreeCAD
 
-    thick = params.thickness * _MM_TO_UNIT
-    aft_x = spec.position.x + spec.dimensions.length - thick
-    width = spec.dimensions.width
-    height = spec.dimensions.height
+    thick = params.thickness
+    aft_x = (spec.position.x + spec.dimensions.length) * _M_TO_MM - thick
+    width = spec.dimensions.width * _M_TO_MM
+    height = spec.dimensions.height * _M_TO_MM
     return _box(
         target_doc, added, f"{label}_Bulkhead",
-        FreeCAD.Vector(aft_x, -width / 2.0, spec.position.z), (thick, width, height),
+        FreeCAD.Vector(aft_x, -width / 2.0, spec.position.z * _M_TO_MM), (thick, width, height),
     )
 
 

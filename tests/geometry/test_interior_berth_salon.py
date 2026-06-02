@@ -9,17 +9,23 @@ import pytest
 
 from storebro import build_deck, build_hull, build_interior
 
+_M_TO_MM = 1000.0
+
 
 def _within(piece_bb: object, comp: object) -> bool:
+    # spec 017: geometry is built at millimetre scale, so the spec-derived
+    # (metre-space) envelope bounds are converted to mm for comparison.
     s = comp.spec
-    x0, z0 = s.position.x, s.position.z
-    hw = s.dimensions.width / 2.0
-    tol = 1e-6
+    x0, z0 = s.position.x * _M_TO_MM, s.position.z * _M_TO_MM
+    hw = s.dimensions.width / 2.0 * _M_TO_MM
+    length = s.dimensions.length * _M_TO_MM
+    height = s.dimensions.height * _M_TO_MM
+    tol = 1e-3
     return (
         piece_bb.XMin >= x0 - tol
-        and piece_bb.XMax <= x0 + s.dimensions.length + tol
+        and piece_bb.XMax <= x0 + length + tol
         and piece_bb.ZMin >= z0 - tol
-        and piece_bb.ZMax <= z0 + s.dimensions.height + tol
+        and piece_bb.ZMax <= z0 + height + tol
         and piece_bb.YMin >= -hw - tol
         and piece_bb.YMax <= hw + tol
     )
