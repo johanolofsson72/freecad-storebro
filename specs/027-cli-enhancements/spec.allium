@@ -1,0 +1,67 @@
+-- allium: 3
+--
+-- Spec 027 — cli-enhancements — ELICITED from spec.md
+--
+-- A --json machine-readable build output + hull parameter overrides on
+-- `storebro build`. Additive CLI surface; no geometry change.
+
+config {
+    json_fields: Integer = 5  -- format, target_path, byte_count, sha256, version
+}
+
+external entity HullParameters {
+    loa: Decimal
+    beam_max: Decimal
+    draft: Decimal
+    station_count: Integer
+}
+
+external entity ExportArtifact {
+    format: String
+    target_path: String
+    byte_count: Integer
+    sha256: String
+}
+
+value BuildResultJson {
+    format: String
+    target_path: String
+    byte_count: Integer
+    sha256: String
+    version: String
+}
+
+-- FR-001: --json emits one JSON object with the artifact fields + version.
+rule EmitJson {
+    when: BuildCli(json: true)
+    ensures:
+        let r = BuildResultJson.created()
+        StdoutIsSingleJsonObject(result: r)
+}
+
+-- FR-002: without --json, the human line is unchanged.
+rule EmitHumanLine {
+    when: BuildCli(json: false)
+    ensures: StdoutIsHumanLine()
+}
+
+-- FR-003/FR-005: overrides thread into HullParameters; out-of-range rejected.
+rule ApplyHullOverrides {
+    when: BuildCli(overrides)
+    requires: overrides.in_range = true
+    ensures: HullBuiltWithOverrides(overrides)
+}
+
+rule RejectOutOfRangeOverride {
+    when: BuildCli(overrides)
+    requires: overrides.in_range = false
+    ensures: NonZeroExitWithValidationMessage()
+}
+
+actor Operator { identified_by: HullParameters }
+
+-- FR-007: deferred CLI follow-ons.
+deferred Cli.gui_launch
+deferred Cli.config_file
+deferred Cli.multi_format_single_invocation
+deferred Cli.custom_layout_dir

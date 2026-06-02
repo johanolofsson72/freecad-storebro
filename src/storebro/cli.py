@@ -18,6 +18,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import sys
@@ -42,6 +43,7 @@ from storebro.export import (
 from storebro.hull import (
     HullConstructionError,
     HullParameterError,
+    HullParameters,
     build_hull,
 )
 from storebro.interior import (
@@ -165,6 +167,21 @@ def _build_top_parser() -> argparse.ArgumentParser:
         default=2,
         help="Propulsion layout: 1 (single screw) or 2 (twin screws). Default: 2.",
     )
+    # spec 027 — hull overrides (omitted → HullParameters defaults).
+    build_p.add_argument("--loa", type=float, default=None, help="Hull length overall (m).")
+    build_p.add_argument("--beam", type=float, default=None, help="Hull maximum beam (m).")
+    build_p.add_argument("--draft", type=float, default=None, help="Hull draft at amidships (m).")
+    build_p.add_argument(
+        "--station-count",
+        type=int,
+        default=None,
+        help="Hull station count [3, 81] — higher is smoother (spec 018). Default: 31.",
+    )
+    build_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the build result as a single JSON object instead of a human line.",
+    )
     build_p.add_argument(
         "--no-propulsion",
         action="store_true",
@@ -258,8 +275,25 @@ def _run_build(args: argparse.Namespace) -> int:
     # spec 015 — cosmetic colors on by default; --no-colors builds a neutral model.
     colors = not args.no_colors
 
+    # spec 027 — hull overrides: build a HullParameters only when any override
+    # is provided (else None → build_hull uses defaults). HullParameters'
+    # own validation raises on out-of-range values, mapped to a non-zero exit.
+    _overrides = {
+        k: v
+        for k, v in (
+            ("loa", args.loa),
+            ("beam_max", args.beam),
+            ("draft", args.draft),
+            ("station_count", args.station_count),
+        )
+        if v is not None
+    }
+    hull_params = HullParameters(**_overrides) if _overrides else None
+
     fresh_doc = FreeCAD.newDocument("storebro_build")
-    hull = build_hull(document=fresh_doc, apply_render_attributes=colors)
+    hull = build_hull(
+        document=fresh_doc, parameters=hull_params, apply_render_attributes=colors
+    )
     deck = build_deck(
         hull,
         superstructure_variant=args.superstructure,
@@ -292,10 +326,25 @@ def _run_build(args: argparse.Namespace) -> int:
             tessellation_tolerance=args.tessellation,
         )
 
-    print(
-        f"wrote {artifact.format} to {artifact.target_path} "
-        f"({artifact.byte_count} bytes, SHA-256 {artifact.sha256})"
-    )
+    if args.json:
+        from storebro import __version__
+
+        print(
+            json.dumps(
+                {
+                    "format": artifact.format,
+                    "target_path": str(artifact.target_path),
+                    "byte_count": artifact.byte_count,
+                    "sha256": artifact.sha256,
+                    "version": __version__,
+                }
+            )
+        )
+    else:
+        print(
+            f"wrote {artifact.format} to {artifact.target_path} "
+            f"({artifact.byte_count} bytes, SHA-256 {artifact.sha256})"
+        )
     return 0
 
 

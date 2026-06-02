@@ -4,6 +4,26 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-02
+
+Spec 027 — CLI enhancements. Two practical additions to `storebro build`. A
+`--json` flag prints the build result as one JSON object (`format`,
+`target_path`, `byte_count`, `sha256`, `version`) instead of the human line, so
+scripts can parse it instead of scraping prose. And four hull overrides —
+`--loa`, `--beam`, `--draft`, `--station-count` — let you tune the hull from the
+command line; `--station-count` finally exposes the spec 018 smoothness knob.
+Out-of-range values are rejected by the usual `HullParameters` validation with a
+non-zero exit. With no new flags the command is byte-identical to before.
+
+GUI launch, a config file, multi-format single-invocation export, and a
+custom-layout directory are deferred to follow-ons.
+
+### Added
+
+- `storebro build --json` — machine-readable build result.
+- `storebro build --loa/--beam/--draft/--station-count` — hull overrides
+  (omitted ones use the `HullParameters` defaults).
+
 ## [1.6.0] - 2026-06-02
 
 Spec 020 — superstructure curvature refinement. Two of the spec 008 geometry

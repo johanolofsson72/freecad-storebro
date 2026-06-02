@@ -35,6 +35,12 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         "--no-colors",
         # spec 016 (ds-variant-superstructure) FR-015: pick the topsides silhouette.
         "--superstructure",
+        # spec 027 (cli-enhancements): JSON output + hull overrides.
+        "--json",
+        "--loa",
+        "--beam",
+        "--draft",
+        "--station-count",
     }
 )
 
@@ -54,11 +60,12 @@ def _collect_flags(parser_or_subparser: object) -> set[str]:
     return flags
 
 
-def test_cli_flag_set_does_not_introduce_station_count_flag() -> None:
+def test_station_count_flag_exposed_by_spec_027() -> None:
+    # spec 009 deferred a station_count CLI flag; spec 027 (cli-enhancements)
+    # intentionally exposes it as `--station-count` (the spec 018 smoothness knob).
     parser = build_parser()
     flags = _collect_flags(parser)
-    assert "--station-count" not in flags
-    assert "--stations" not in flags
+    assert "--station-count" in flags
 
 
 def test_cli_flag_set_does_not_introduce_bilge_radius_flag() -> None:
