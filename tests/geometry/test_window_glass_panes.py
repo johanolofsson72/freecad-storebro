@@ -7,8 +7,7 @@ Name; the host hull/trunk/deckhouse solids stay single manifold solids.
 from __future__ import annotations
 
 from storebro import build_deck, build_hull
-from storebro.deck import DeckGlazingParameters, DeckhouseParameters, DsWindowParameters
-from storebro.hull import HullGlazingParameters, HullParameters
+from storebro.hull import HullGlazingParameters
 from storebro.render import role_for_label
 
 

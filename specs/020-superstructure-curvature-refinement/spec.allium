@@ -1,0 +1,77 @@
+-- allium: 3
+--
+-- Spec 020 — superstructure-curvature-refinement — ELICITED from spec.md
+--
+-- Smooth hardtop curl + crowned windshield via dense Ruled=True lofts, and a
+-- swept perimeter top-rail via makePipeShell. A FreeCAD spike proved all three
+-- manifold-safe (curl 0mm overshoot at n=3/7/13; swept rail valid single
+-- solid). No Ruled=False (spec 018 wall).
+
+config {
+    manifold_solids_count: Integer = 1
+    default_curl_sections: Integer = 7
+    default_crown_sections: Integer = 5
+}
+
+entity Hardtop {
+    solids_count: Integer
+    is_valid: Boolean
+    z_overshoot_mm: Decimal
+    curl_sections: Integer
+    ruled: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant NoOvershoot { this.z_overshoot_mm <= 0.0 }
+    invariant AlwaysRuledTrue { this.ruled = true }
+}
+
+entity SweptRail {
+    solids_count: Integer
+    is_valid: Boolean
+    fell_back_to_straight: Boolean
+
+    -- FR-004/FR-005: a valid swept solid, or the spec 010 straight fallback.
+    invariant ValidOrFallback {
+        (this.solids_count = 1 and this.is_valid = true)
+        or this.fell_back_to_straight = true
+    }
+}
+
+rule BuildSmoothCurl {
+    when: BuildHardtop(curl_sections)
+    requires: curl_sections >= 2
+    ensures:
+        let ht = Hardtop.created(solids_count: 1, is_valid: true, z_overshoot_mm: 0.0, ruled: true)
+        ht.curl_sections = curl_sections
+}
+
+rule BuildSweptRail {
+    when: BuildRailing(post_count)
+    ensures:
+        if SweepSucceeds():
+            SweptRail.created(solids_count: 1, is_valid: true, fell_back_to_straight: false)
+        if not SweepSucceeds():
+            SweptRail.created(solids_count: 1, is_valid: true, fell_back_to_straight: true)
+}
+
+rule RollbackOnFailure {
+    when: FreecadFailure(stage)
+    requires: stage = superstructure_build
+    ensures:
+        ConstructionErrorRaised()
+        DocumentRestoredToPreCallState()
+}
+
+invariant SmoothBodiesStayManifold {
+    for h in Hardtop: h.solids_count = 1
+}
+
+actor Builder { identified_by: Hardtop }
+
+-- Ruled=False curl stays out (overshoots, spec 018 evidence).
+deferred Hardtop.ruled_false_curl_loft
+-- Windshield crown deferred during implementation: the windshield is already
+-- Ruled=False-smooth in rake; a transverse arched top endangers the spec 011
+-- frame/pane. Split to a follow-on spec.
+deferred Windshield.transverse_top_crown

@@ -530,8 +530,11 @@ class HardtopParameters:
     height_above_deck: float = 2050.0
     leading_edge_curl_depth: float = 80.0
     leading_edge_curl_length: float = 250.0
+    curl_sections: int = 7  # spec 020: dense Ruled=True sections tracing the curl
 
     def __post_init__(self) -> None:
+        if self.curl_sections < 2:
+            raise DeckParameterError("hardtop_curl_sections", self.curl_sections, ">= 2")
         for name, value in (
             ("hardtop_length", self.length),
             ("hardtop_forward_width", self.forward_width),
@@ -2200,7 +2203,6 @@ def _build_hardtop(
 
     fwd_x_mm = cabin_trunk.body.Shape.BoundBox.XMax
     aft_x_mm = fwd_x_mm + ht.length
-    curl_end_x_mm = fwd_x_mm + ht.leading_edge_curl_length
     curl_drop_mm = ht.leading_edge_curl_depth
 
     body = target_doc.addObject("PartDesign::Body", "Deck_Hardtop")
@@ -2243,36 +2245,42 @@ def _build_hardtop(
         _pd_close_loop_constraints(sketch, line_ids)
         return sketch
 
-    # Three station sketches: forward (curl drops), curl-end, aft.
-    # All datums are placed at the hardtop centerline Z; the sketch's local
-    # vertical maps to global Z, so the curl drop is encoded as the sketch
-    # base_z_local offset.
+    # spec 020 — dense Ruled=True curl. The forward `curl_sections` stations
+    # trace a cosine drop over `leading_edge_curl_length` (smooth curve, 0 mm
+    # Z-overshoot — spike-confirmed), then a final aft station gives the taper.
+    # Ruled=False is NOT used (it overshoots Z; spec 018 evidence).
     center_z_mm = (hardtop_underside_z_mm + hardtop_topside_z_mm) / 2.0
-    fwd_datum = _make_xz_datum_at_x("HardtopForwardDatum", fwd_x_mm, center_z_mm)
-    mid_datum = _make_xz_datum_at_x("HardtopMidDatum", curl_end_x_mm, center_z_mm)
-    aft_datum = _make_xz_datum_at_x("HardtopAftDatum", aft_x_mm, center_z_mm)
+    curl_len = min(ht.leading_edge_curl_length, ht.length)
 
-    # forward_width tapers linearly into aft_width across the full length.
-    mid_width = ht.forward_width + (ht.aft_width - ht.forward_width) * (
-        ht.leading_edge_curl_length / max(ht.length, 1e-9)
-    )
+    def _width_at(x_local: float) -> float:
+        t = x_local / max(ht.length, 1e-9)
+        return ht.forward_width + (ht.aft_width - ht.forward_width) * t
 
-    # Forward sketch sits curl_drop lower in global Z.
-    fwd_sketch = _rect_sketch(
-        "HardtopForwardSketch", fwd_datum, ht.forward_width / 2.0, -curl_drop_mm
-    )
-    mid_sketch = _rect_sketch("HardtopMidSketch", mid_datum, mid_width / 2.0, 0.0)
-    aft_sketch = _rect_sketch("HardtopAftSketch", aft_datum, ht.aft_width / 2.0, 0.0)
+    def _curl_drop_at(x_local: float) -> float:
+        # Cosine ease from full drop at the leading edge to 0 at curl end.
+        if x_local >= curl_len:
+            return 0.0
+        return curl_drop_mm * (0.5 + 0.5 * math.cos(math.pi * x_local / curl_len))
+
+    # Station X positions: dense across the curl, plus the aft end.
+    curl_xs = [
+        fwd_x_mm + curl_len * (i / (ht.curl_sections - 1)) for i in range(ht.curl_sections)
+    ]
+    station_xs = [*curl_xs, aft_x_mm]
+    sketches: list[Any] = []
+    for idx, x_mm in enumerate(station_xs):
+        x_local = x_mm - fwd_x_mm
+        datum = _make_xz_datum_at_x(f"HardtopDatum{idx}", x_mm, center_z_mm)
+        sketch = _rect_sketch(
+            f"HardtopSketch{idx}", datum, _width_at(x_local) / 2.0, -_curl_drop_at(x_local)
+        )
+        sketches.append(sketch)
     target_doc.recompute()
 
     loft = body.newObject("PartDesign::AdditiveLoft", "HardtopLoft")
     added.append(loft)
-    loft.Profile = (fwd_sketch, [""])
-    loft.Sections = [(mid_sketch, [""]), (aft_sketch, [""])]
-    # Ruled=True (piecewise-linear loft) — Ruled=False overshoots in Z above
-    # the aft section when transitioning from the curled forward section.
-    # A smoother curl awaits a denser section set (matches spec 007's
-    # deferred `Hull.b_spline_loft` rationale).
+    loft.Profile = (sketches[0], [""])
+    loft.Sections = [(s, [""]) for s in sketches[1:]]
     loft.Ruled = True
     loft.Closed = False
     target_doc.recompute()
@@ -2439,10 +2447,12 @@ def _build_railings(
     perimeter. A swept-along-perimeter pipe is a v1.2+ refinement; the
     current shape captures height + post spacing accurately enough for
     the ±1% reference fidelity bar (which applies only to principal
-    dimensions, not the per-post detail).
+    dimensions, not the per-post detail). spec 020 sweeps the top rail along
+    the sheer via PartDesign::AdditivePipe (with a straight-Pad fallback).
     """
     import FreeCAD
     import Part
+    import Sketcher
 
     sp = superstructure or parameters.to_superstructure_parameters()
     rp = sp.railings
@@ -2464,40 +2474,107 @@ def _build_railings(
         added.append(body)
         target_doc.recompute()
 
-        # Top rail: a horizontal cylinder running from forward_x to aft_x.
-        # Modeled as a Pad of a small circle on a YZ-parallel datum at
-        # forward_x, extruded along X.
+        # spec 020 — swept perimeter top-rail: a PartDesign::AdditivePipe of a
+        # circular profile along a path that traces the sheer (Z rises toward
+        # the bow), so the rail follows the deck edge instead of a flat bar.
+        # Falls back to the spec 008 straight Pad if the sweep fails (FR-005).
         yz_plane = _pd_get_origin_plane(body, "YZ_Plane")
-        rail_datum = body.newObject("PartDesign::Plane", f"Rail{side}TopRailDatum")
-        added.append(rail_datum)
-        rail_datum.AttachmentSupport = [(yz_plane, "")]
-        rail_datum.MapMode = "FlatFace"
-        # YZ_Plane local frame: local X = global Y, local Y = global Z,
-        # local Z = global X. Datum at global (forward_x, 0, rail_top_z).
-        rail_datum.AttachmentOffset = FreeCAD.Placement(
-            FreeCAD.Vector(0.0, rail_top_z_mm, rp.forward_x),
-            FreeCAD.Rotation(),
-        )
 
-        rail_sketch = body.newObject("Sketcher::SketchObject", f"Rail{side}TopRailSketch")
-        added.append(rail_sketch)
-        rail_sketch.AttachmentSupport = [(rail_datum, "")]
-        rail_sketch.MapMode = "FlatFace"
-        rail_circle = Part.Circle(
-            FreeCAD.Vector(sign * rail_y_mm, 0, 0),
-            FreeCAD.Vector(0, 0, 1),
-            rp.top_rail_diameter / 2.0,
-        )
-        rail_sketch.addGeometry(rail_circle.toShape().Curve, False)
-        target_doc.recompute()
+        def _straight_rail(
+            body: Any = body, side: str = side, sign: int = sign, yz_plane: Any = yz_plane
+        ) -> None:
+            rail_datum = body.newObject("PartDesign::Plane", f"Rail{side}TopRailDatum")
+            added.append(rail_datum)
+            rail_datum.AttachmentSupport = [(yz_plane, "")]
+            rail_datum.MapMode = "FlatFace"
+            rail_datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(0.0, rail_top_z_mm, rp.forward_x), FreeCAD.Rotation()
+            )
+            rail_sketch = body.newObject("Sketcher::SketchObject", f"Rail{side}TopRailSketch")
+            added.append(rail_sketch)
+            rail_sketch.AttachmentSupport = [(rail_datum, "")]
+            rail_sketch.MapMode = "FlatFace"
+            rail_sketch.addGeometry(
+                Part.Circle(
+                    FreeCAD.Vector(sign * rail_y_mm, 0, 0),
+                    FreeCAD.Vector(0, 0, 1),
+                    rp.top_rail_diameter / 2.0,
+                ).toShape().Curve,
+                False,
+            )
+            target_doc.recompute()
+            rail_pad = body.newObject("PartDesign::Pad", f"Rail{side}TopRailPad")
+            added.append(rail_pad)
+            rail_pad.Profile = (rail_sketch, [""])
+            rail_pad.Length = rp.aft_x - rp.forward_x
+            rail_pad.Midplane = False
+            rail_pad.Reversed = False
+            target_doc.recompute()
 
-        rail_pad = body.newObject("PartDesign::Pad", f"Rail{side}TopRailPad")
-        added.append(rail_pad)
-        rail_pad.Profile = (rail_sketch, [""])
-        rail_pad.Length = rp.aft_x - rp.forward_x
-        rail_pad.Midplane = False
-        rail_pad.Reversed = False
-        target_doc.recompute()
+        swept_ok = False
+        try:
+            # Path on an XZ-parallel datum offset to Y = sign*rail_y; tracing
+            # (x, deck_top_z(x)+height) so the rail Z follows the sheer.
+            xz_plane = _pd_get_origin_plane(body, "XZ_Plane")
+            path_datum = body.newObject("PartDesign::Plane", f"Rail{side}PathDatum")
+            added.append(path_datum)
+            path_datum.AttachmentSupport = [(xz_plane, "")]
+            path_datum.MapMode = "FlatFace"
+            # XZ_Plane normal = global Y (local Z); offset to Y = sign*rail_y.
+            path_datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(0.0, 0.0, sign * rail_y_mm), FreeCAD.Rotation()
+            )
+            path_sketch = body.newObject("Sketcher::SketchObject", f"Rail{side}PathSketch")
+            added.append(path_sketch)
+            path_sketch.AttachmentSupport = [(path_datum, "")]
+            path_sketch.MapMode = "FlatFace"
+            n_path = 7
+            ppts = []
+            for i in range(n_path):
+                xi = rp.forward_x + (rp.aft_x - rp.forward_x) * (i / (n_path - 1))
+                zi = _resolve_deck_top_z_at(deck_plate, xi) + rp.height_above_deck
+                ppts.append(FreeCAD.Vector(xi, zi, 0))  # local x=globalX, y=globalZ
+            pids = [
+                path_sketch.addGeometry(Part.LineSegment(ppts[k], ppts[k + 1]), False)
+                for k in range(n_path - 1)
+            ]
+            for k in range(n_path - 2):
+                path_sketch.addConstraint(
+                    Sketcher.Constraint("Coincident", pids[k], 2, pids[k + 1], 1)
+                )
+            # Profile circle on YZ datum at the forward end (normal = path tangent).
+            prof_datum = body.newObject("PartDesign::Plane", f"Rail{side}ProfDatum")
+            added.append(prof_datum)
+            prof_datum.AttachmentSupport = [(yz_plane, "")]
+            prof_datum.MapMode = "FlatFace"
+            prof_datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(0.0, 0.0, rp.forward_x), FreeCAD.Rotation()
+            )
+            prof_sketch = body.newObject("Sketcher::SketchObject", f"Rail{side}ProfSketch")
+            added.append(prof_sketch)
+            prof_sketch.AttachmentSupport = [(prof_datum, "")]
+            prof_sketch.MapMode = "FlatFace"
+            z0 = _resolve_deck_top_z_at(deck_plate, rp.forward_x) + rp.height_above_deck
+            prof_sketch.addGeometry(
+                Part.Circle(
+                    FreeCAD.Vector(sign * rail_y_mm, z0, 0),
+                    FreeCAD.Vector(0, 0, 1),
+                    rp.top_rail_diameter / 2.0,
+                ).toShape().Curve,
+                False,
+            )
+            target_doc.recompute()
+            pipe = body.newObject("PartDesign::AdditivePipe", f"Rail{side}TopRailPipe")
+            added.append(pipe)
+            pipe.Profile = prof_sketch
+            pipe.Spine = path_sketch
+            target_doc.recompute()
+            sh = pipe.Shape
+            swept_ok = sh is not None and not sh.isNull() and sh.isValid() and len(sh.Solids) == 1
+        except BaseException:
+            swept_ok = False
+        if not swept_ok:
+            _straight_rail()
 
         # Posts: one Pad per post, evenly spaced.
         if rp.post_count_per_side > 0:

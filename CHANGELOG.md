@@ -4,6 +4,32 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-02
+
+Spec 020 — superstructure curvature refinement. Two of the spec 008 geometry
+deferrals land, both proven on a FreeCAD spike before any code: the hardtop
+leading edge now curls down as a smooth cosine curve (a dense `Ruled=True` loft,
+not `Ruled=False` — that overshoots, per spec 018), and the railing top-rail is
+swept along the sheer with a `PartDesign::AdditivePipe` so it follows the deck
+edge instead of sitting as a flat bar. Both stay single manifold solids; the
+swept rail falls back to the spec 008 straight bar if the sweep ever fails, so a
+broken rail never ships.
+
+The windshield crown was deferred during implementation: the windshield loft is
+already `Ruled=False`-smooth in rake, and a transverse arched top edge would
+ripple into the spec 011 frame opening and glass pane at real regression risk
+for the lowest-priority refinement. It is split into a follow-on.
+
+### Added
+
+- `HardtopParameters.curl_sections` (default 7) — the dense sections tracing the
+  smooth hardtop curl; its minimum reproduces the spec 008 faceted curl.
+
+### Changed
+
+- The railing top-rail is a swept `AdditivePipe` following the sheer (was a
+  straight per-side cylinder), with a straight-bar fallback.
+
 ## [1.5.0] - 2026-06-02
 
 Spec 019 — window glass panes. The recessed windows now read as glass. Every
