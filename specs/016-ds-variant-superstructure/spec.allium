@@ -1,0 +1,252 @@
+-- allium: 3
+--
+-- Spec 016 — ds-variant-superstructure — ELICITED from spec.md
+--
+-- A second canonical topsides silhouette: the Storebro DS (deck saloon /
+-- styrhytt) enclosed wheelhouse, selectable as a deck-build variant. The
+-- standard open-flybridge superstructure (spec 008) stays the default; the
+-- DS variant replaces cabin trunk + windshield + hardtop + pillars with one
+-- enclosed deckhouse solid. The hull (spec 007) and all deck-level hardware
+-- (specs 008/010) are shared verbatim.
+--
+-- Source spec: specs/016-ds-variant-superstructure/spec.md
+-- Reference: docs/references/storo34_side_lines.png
+
+config {
+    -- DeckhouseParameters defaults (mm / degrees), reference-faithful to
+    -- storo34_side_lines.png at the canonical RC34 LOA (~10360 mm).
+    default_deckhouse_length_mm: Decimal = 6200.0
+    default_deckhouse_forward_width_mm: Decimal = 2000.0
+    default_deckhouse_aft_width_mm: Decimal = 2200.0
+    default_deckhouse_height_above_deck_mm: Decimal = 1500.0
+    default_deckhouse_front_rake_angle_deg: Decimal = 30.0
+    default_deckhouse_roof_thickness_mm: Decimal = 60.0
+    default_deckhouse_wall_inset_mm: Decimal = 250.0
+    default_deckhouse_fwd_offset_mm: Decimal = 2200.0
+    -- DS side/front window blind-recess defaults.
+    default_ds_window_count_per_side: Integer = 3
+    default_ds_window_length_mm: Decimal = 1000.0
+    default_ds_window_height_mm: Decimal = 500.0
+    default_ds_window_recess_depth_mm: Decimal = 15.0
+    manifold_solids_count: Integer = 1
+    reference_fidelity_tolerance_pct: Decimal = 1.0
+}
+
+enum SuperstructureVariant { standard | ds }
+
+external entity HullBody {
+    loa_mm: Decimal
+    beam_max_mm: Decimal
+}
+
+external entity DeckPlate {
+    forward_x_mm: Decimal
+    aft_x_mm: Decimal
+    -- Sampled top surface Z at a given X; the deckhouse seats on it.
+    top_z_at_x_mm: Decimal
+}
+
+-- The open-flybridge composite from spec 008; rejected in DS mode.
+external entity DeckSuperstructureParameters {
+    present: Boolean
+}
+
+value DsWindowParameters {
+    count_per_side: Integer
+    length: Decimal
+    height: Decimal
+    recess_depth: Decimal
+
+    invariant NonNegativeCount { this.count_per_side >= 0 }
+    invariant PositiveLength { this.length > 0 }
+    invariant PositiveHeight { this.height > 0 }
+    invariant PositiveRecessDepth { this.recess_depth > 0 }
+}
+
+value DeckhouseParameters {
+    length: Decimal
+    forward_width: Decimal
+    aft_width: Decimal
+    height_above_deck: Decimal
+    front_rake_angle: Decimal
+    roof_thickness: Decimal
+    wall_inset: Decimal
+    fwd_offset: Decimal
+    windows: DsWindowParameters
+
+    invariant PositiveLength { this.length > 0 }
+    invariant PositiveForwardWidth { this.forward_width > 0 }
+    invariant PositiveAftWidth { this.aft_width > 0 }
+    invariant PositiveHeight { this.height_above_deck > 0 }
+    invariant PositiveRoofThickness { this.roof_thickness > 0 }
+    invariant NonNegativeWallInset { this.wall_inset >= 0 }
+    invariant NonNegativeFwdOffset { this.fwd_offset >= 0 }
+    -- Tapered-silhouette invariant, matching the spec 008 cabin-trunk rule.
+    invariant TaperedSilhouette { this.forward_width <= this.aft_width }
+    invariant FrontRakeRangeLower { this.front_rake_angle >= 0 }
+    invariant FrontRakeRangeUpper { this.front_rake_angle <= 60 }
+    -- A window recess deep enough to pierce the wall would split the solid.
+    invariant RecessShallowerThanWall { this.windows.recess_depth < this.wall_inset }
+}
+
+-- The enclosed DS deckhouse: ONE filled solid (raked front wall + two side
+-- walls + aft wall + flat roof) carrying blind window recesses. Built only
+-- in DS mode; seated on the sampled deck-plate top.
+entity Deckhouse {
+    parameters: DeckhouseParameters
+    solids_count: Integer
+    is_valid: Boolean
+    seated_on_deck: Boolean
+    window_count: Integer
+    color_assigned: Boolean
+
+    -- The spec 009 manifold regression guard (FR-004).
+    invariant ManifoldSolid { this.solids_count = 1 }
+    invariant ValidShape { this.is_valid = true }
+    -- FR-005: seated on the actual sampled deck-plate top, not floating/piercing.
+    invariant SeatedOnDeck { this.seated_on_deck = true }
+}
+
+-- The deck build result, extended for variant selection. The four open-
+-- flybridge body slots are optional and null in DS mode; deckhouse is null
+-- in standard mode.
+entity Deck {
+    variant: SuperstructureVariant
+    deck_plate: DeckPlate
+    deckhouse: Deckhouse? when variant = ds
+    cabin_trunk_present: Boolean
+    windshield_present: Boolean
+    hardtop_present: Boolean
+    pillars_present: Boolean
+    railings_present: Boolean
+    hardware_present: Boolean
+
+    -- FR-008: exactly one superstructure shape is materialized.
+    invariant DsHasDeckhouseOnly {
+        variant = ds implies (this.deckhouse != null
+            and this.cabin_trunk_present = false
+            and this.windshield_present = false
+            and this.hardtop_present = false
+            and this.pillars_present = false)
+    }
+    invariant StandardHasFlybridgeOnly {
+        variant = standard implies (this.deckhouse = null
+            and this.cabin_trunk_present = true
+            and this.windshield_present = true
+            and this.hardtop_present = true
+            and this.pillars_present = true)
+    }
+    -- FR-007: deck plate + railings + hardware present in BOTH variants.
+    invariant SharedItemsAlwaysPresent {
+        this.railings_present = true and this.hardware_present = true
+    }
+}
+
+-- Build the standard open-flybridge superstructure (the default, unchanged).
+rule BuildStandardDeck {
+    when: BuildDeck(hull, variant)
+    requires: variant = standard
+    ensures:
+        Deck.created(variant: standard)
+        -- FR-002: byte-identical to the pre-feature standard output.
+}
+
+-- Build the DS enclosed deckhouse variant.
+rule BuildDsDeck {
+    when: BuildDsDeck(hull, variant, params)
+    -- FR-012: DS parameters fit the hull before construction.
+    requires:
+        variant = ds
+        params.fwd_offset + params.length <= hull.loa_mm
+        params.aft_width <= hull.beam_max_mm
+    ensures:
+        let house = Deckhouse.created(parameters: params, solids_count: 1, is_valid: true, seated_on_deck: true)
+        Deck.created(variant: ds, deckhouse: house)
+}
+
+-- FR-006: DS SIDE windows are blind recesses into the single filled solid;
+-- the raked front face itself is the windscreen (no separate front recess).
+rule CutDsWindows {
+    when: CutDsWindows(house, windows)
+    requires: windows.recess_depth < house.parameters.wall_inset
+    ensures:
+        -- Still one manifold solid after every recess (no through-holes).
+        house.solids_count = 1
+        house.is_valid = true
+        -- count_per_side recesses per side, both sides (no front recess).
+        house.window_count = windows.count_per_side * 2
+}
+
+-- FR-014: DS variant + explicit open-flybridge params is contradictory.
+rule RejectDsWithFlybridgeParams {
+    when: BuildDsDeckWithFlybridgeParams(hull, superstructure)
+    requires: superstructure.present = true
+    ensures: BuildRejected(reason: contradictory_variant_and_superstructure_params)
+}
+
+-- FR-011: invalid DS parameters rejected before any FreeCAD call.
+rule RejectInvalidDeckhouseParameters {
+    when: BuildDsDeck(hull, variant, params)
+    requires: not (params.length > 0
+        and params.forward_width > 0
+        and params.aft_width > 0
+        and params.height_above_deck > 0
+        and params.forward_width <= params.aft_width
+        and params.front_rake_angle >= 0 and params.front_rake_angle <= 60)
+    ensures: ParameterErrorRaised(before_any_freecad_call: true)
+}
+
+-- FR-013: any mid-build FreeCAD failure rolls back to the pre-call state.
+rule RollbackOnConstructionFailure {
+    when: FreecadFailure(stage)
+    requires: stage = ds_deck_build
+    ensures:
+        ConstructionErrorRaised()
+        -- Document restored: zero residual partial bodies (SC-006).
+        DocumentRestoredToPreCallState()
+}
+
+-- FR-017: render attributes colour the deckhouse when enabled.
+rule ApplyDeckhouseRenderAttributes {
+    when: ApplyRenderAttributes(house, enabled)
+    requires: enabled = true
+    ensures:
+        house.color_assigned = true
+        -- Disabled => identical geometry, no attribute assignment.
+}
+
+-- FR-001 / FR-015: the CLI selects the variant; default standard.
+surface DeckBuildCli {
+    facing operator: Builder
+    context hull: HullBody
+    provides:
+        BuildDeck(hull, variant)
+        BuildDsDeck(hull, variant, params)
+    exposes: SuperstructureVariant
+}
+
+actor Builder { identified_by: HullBody }
+
+invariant DefaultVariantIsStandard {
+    for d in Deck where variant = null:
+        d.variant = standard
+}
+
+-- Reproducibility (FR-016): identical inputs produce identical geometry.
+invariant DeterministicBuild {
+    for d in Deck:
+        d.deckhouse != null implies d.deckhouse.is_valid = true
+}
+
+-- Reference fidelity (FR-010 / SC-004): principal dims within ±1% of the
+-- storo34_side_lines.png reference. Verified by maintainer GUI eyeball;
+-- not machine-checkable here.
+deferred Deckhouse.reference_fidelity_within_one_percent
+
+-- Out of scope this spec (clarified): separate translucent glass panes,
+-- mullions, opening windows, door cut-throughs, DS-specific interior refit.
+deferred Deckhouse.separate_glass_panes
+deferred Deckhouse.front_window_recess
+deferred Deckhouse.window_mullions
+deferred Deckhouse.helm_door_opening
+deferred Deckhouse.ds_specific_interior_layout

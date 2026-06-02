@@ -4,6 +4,39 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-02
+
+Spec 016 — DS variant superstructure. The deck builder now has a second
+canonical silhouette: the Storebro DS (deck saloon, or *styrhytt*), an enclosed
+wheelhouse. Pass `superstructure_variant="ds"` to `build_deck` (or
+`--superstructure ds` on the CLI) and the open-flybridge cabin trunk,
+windshield, hardtop, and pillars give way to a single enclosed deckhouse. That
+deckhouse is one filled solid: a raked windscreen front, tapered side walls
+carrying blind wraparound window recesses, an aft wall, and a flat roof, seated
+on the sampled deck top. The hull, deck plate, railings, and all deck hardware
+are shared verbatim; only the deckhouse differs. The default stays `standard`,
+so every existing call site builds byte-identical output. The surface only
+grows, so this is a minor bump to 1.3.0.
+
+The DS front is the raked windscreen face itself, not a cut recess — the
+reference DS front is a single large screen. Only the side windows are blind
+recesses; a separate front-window frame is a future-PATCH refinement.
+
+### Added
+
+- `superstructure_variant` keyword on `build_deck` (`"standard"` default,
+  `"ds"` for the enclosed deck saloon) and the matching `--superstructure
+  {standard,ds}` CLI flag.
+- `DeckhouseParameters`, `DsWindowParameters`, and the `Deckhouse` wrapper,
+  re-exported from `storebro`.
+- `parameters_deckhouse` keyword on `build_deck` for DS deckhouse dimensions.
+
+### Changed
+
+- `Deck` aggregate: `cabin_trunk`, `windshield`, `hardtop`, `hardtop_pillars`,
+  and `cabin_windows` are now optional and are `None` in the DS variant; new
+  `superstructure_variant` and `deckhouse` fields carry the chosen silhouette.
+
 ## [1.2.0] - 2026-06-02
 
 Spec 015 — render attributes. The model now comes coloured. Every body the

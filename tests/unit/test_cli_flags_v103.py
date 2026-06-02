@@ -33,6 +33,8 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         "--no-propulsion",
         # spec 015 (render-attributes) FR-008: global opt-out of cosmetic colours.
         "--no-colors",
+        # spec 016 (ds-variant-superstructure) FR-015: pick the topsides silhouette.
+        "--superstructure",
     }
 )
 

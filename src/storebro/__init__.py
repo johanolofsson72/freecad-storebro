@@ -24,9 +24,12 @@ from storebro.deck import (
     DeckConstructionError,
     DeckGlazingParameters,
     DeckHardwareParameters,
+    Deckhouse,
+    DeckhouseParameters,
     DeckParameterError,
     DeckParameters,
     DeckSuperstructureParameters,
+    DsWindowParameters,
     HardtopParameters,
     LifelineParameters,
     PillarParameters,
@@ -91,7 +94,7 @@ from storebro.render import (
     role_for_label,
 )
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 __all__ = [
     "PALETTE",
@@ -109,6 +112,9 @@ __all__ = [
     "DeckParameterError",
     "DeckParameters",
     "DeckSuperstructureParameters",
+    "Deckhouse",
+    "DeckhouseParameters",
+    "DsWindowParameters",
     "EngineBed",
     "EngineBedParameters",
     "EngineBlock",

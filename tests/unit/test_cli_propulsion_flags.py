@@ -55,7 +55,11 @@ def _install_fake_build_chain(
     hull = types.SimpleNamespace(document="doc", body="body")
     monkeypatch.setattr(cli, "build_hull", lambda document=None, apply_render_attributes=True: hull)
     monkeypatch.setattr(
-        cli, "build_deck", lambda h, apply_render_attributes=True: types.SimpleNamespace()
+        cli,
+        "build_deck",
+        lambda h, superstructure_variant="standard", apply_render_attributes=True: (
+            types.SimpleNamespace()
+        ),
     )
     monkeypatch.setattr(
         cli, "build_interior", lambda h, d, layout=None, apply_render_attributes=True: None

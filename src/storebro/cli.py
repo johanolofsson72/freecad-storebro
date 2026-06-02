@@ -150,6 +150,15 @@ def _build_top_parser() -> argparse.ArgumentParser:
         help="STL tessellation tolerance in meters (only meaningful for --format stl). Default: 0.001.",
     )
     build_p.add_argument(
+        "--superstructure",
+        choices=("standard", "ds"),
+        default="standard",
+        help=(
+            "Superstructure variant: standard (open flybridge) or ds (enclosed "
+            "deck saloon / styrhytt). Default: standard."
+        ),
+    )
+    build_p.add_argument(
         "--engine-count",
         type=int,
         choices=(1, 2),
@@ -251,7 +260,11 @@ def _run_build(args: argparse.Namespace) -> int:
 
     fresh_doc = FreeCAD.newDocument("storebro_build")
     hull = build_hull(document=fresh_doc, apply_render_attributes=colors)
-    deck = build_deck(hull, apply_render_attributes=colors)
+    deck = build_deck(
+        hull,
+        superstructure_variant=args.superstructure,
+        apply_render_attributes=colors,
+    )
     build_interior(hull, deck, layout=args.layout, apply_render_attributes=colors)
     if not args.no_propulsion:
         # A single-screw layout is centred (offset 0); twin uses the default offset.

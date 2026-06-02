@@ -23,8 +23,8 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from storebro.hull import Hull, HullParameters
 
@@ -55,6 +55,9 @@ __all__ = [
     "DeckParameterError",
     "DeckParameters",
     "DeckSuperstructureParameters",
+    "Deckhouse",
+    "DeckhouseParameters",
+    "DsWindowParameters",
     "HardtopParameters",
     "LifelineParameters",
     "PillarParameters",
@@ -995,6 +998,131 @@ class DeckGlazingParameters:
 
 
 # ---------------------------------------------------------------------------
+# Spec 016 — DS-variant deckhouse parameters (data-model §1)
+#
+# The DS (deck saloon / styrhytt) variant replaces the open-flybridge cabin
+# trunk + windshield + hardtop + pillars with a single enclosed deckhouse
+# solid. These dataclasses parameterize that solid + its blind side/front
+# window recesses. All lengths in mm, all angles in degrees. Defaults are
+# estimate-grade visual measurements from docs/references/storo34_side_lines.png
+# at the canonical RC34 LOA (research.md §R6).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DsWindowParameters:
+    """DS deckhouse side/front window blind-recess parameters (data-model §1.1).
+
+    Plain rectangular blind recesses (no rounded corners, no glass panes —
+    both deferred). Mirrors :class:`CabinWindowParameters` but for the
+    enclosed deckhouse. ``recess_depth`` must stay shallower than the
+    deckhouse ``wall_inset`` (enforced on :class:`DeckhouseParameters`) so a
+    recess can never split the solid (the spec 009 manifold guard).
+
+    Example:
+        >>> p = DsWindowParameters()
+        >>> p.count_per_side, p.length, p.height
+        (3, 1000.0, 500.0)
+    """
+
+    count_per_side: int = 3
+    length: float = 1000.0
+    height: float = 500.0
+    recess_depth: float = 15.0
+
+    def __post_init__(self) -> None:
+        if self.count_per_side < 0:
+            raise DeckParameterError(
+                "ds_window_count_per_side", self.count_per_side, ">= 0"
+            )
+        for name, value in (
+            ("ds_window_length", self.length),
+            ("ds_window_height", self.height),
+            ("ds_window_recess_depth", self.recess_depth),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+
+
+@dataclass(frozen=True)
+class DeckhouseParameters:
+    """Enclosed DS deckhouse reshape parameters (data-model §1.2).
+
+    The deckhouse is built as a single filled :class:`PartDesign.AdditiveLoft`
+    solid (raked front wall + tapered side walls + flat roof top-face),
+    carrying blind window recesses — not a hollowed shell (clarified). All
+    lengths in millimeters, all angles in degrees. Defaults derived from
+    docs/references/storo34_side_lines.png at LOA = 10360 mm.
+
+    Example:
+        >>> p = DeckhouseParameters()
+        >>> p.length, p.forward_width, p.aft_width
+        (6200.0, 2000.0, 2200.0)
+        >>> tall = DeckhouseParameters(height_above_deck=1600.0)
+        >>> tall.height_above_deck
+        1600.0
+    """
+
+    length: float = 6200.0
+    forward_width: float = 2000.0
+    aft_width: float = 2200.0
+    height_above_deck: float = 1500.0
+    front_rake_angle: float = 30.0
+    roof_thickness: float = 60.0
+    wall_inset: float = 250.0
+    fwd_offset: float = 2200.0
+    windows: DsWindowParameters = field(default_factory=DsWindowParameters)
+
+    REFERENCE_STOREBRO_DECKHOUSE_DS: ClassVar[dict[str, float]] = {
+        "length": 6200.0,
+        "forward_width": 2000.0,
+        "aft_width": 2200.0,
+        "height_above_deck": 1500.0,
+        "front_rake_angle": 30.0,
+        "roof_thickness": 60.0,
+        "wall_inset": 250.0,
+        "fwd_offset": 2200.0,
+    }
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("deckhouse_length", self.length),
+            ("deckhouse_forward_width", self.forward_width),
+            ("deckhouse_aft_width", self.aft_width),
+            ("deckhouse_height_above_deck", self.height_above_deck),
+            ("deckhouse_roof_thickness", self.roof_thickness),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        for name, value in (
+            ("deckhouse_wall_inset", self.wall_inset),
+            ("deckhouse_fwd_offset", self.fwd_offset),
+        ):
+            if value < 0:
+                raise DeckParameterError(name, value, ">= 0")
+        if self.forward_width > self.aft_width:
+            raise DeckParameterError(
+                "deckhouse_forward_width<>aft_width",
+                None,
+                "forward_width must be <= aft_width (tapered silhouette invariant)",
+            )
+        if not (0.0 <= self.front_rake_angle <= 60.0):
+            raise DeckParameterError(
+                "deckhouse_front_rake_angle",
+                self.front_rake_angle,
+                "[0, 60] degrees",
+            )
+        # Recesses must stay shallower than the wall they cut into, else the
+        # deckhouse splits into multiple solids (spec 009 non-manifold guard).
+        if self.windows.recess_depth >= self.wall_inset:
+            raise DeckParameterError(
+                "deckhouse_window_recess_depth<>wall_inset",
+                self.windows.recess_depth,
+                f"< wall_inset ({self.wall_inset:.0f} mm) so each recess stays blind",
+            )
+
+
+# ---------------------------------------------------------------------------
 # Sub-Body wrappers (data-model §2)
 # ---------------------------------------------------------------------------
 
@@ -1182,6 +1310,27 @@ class CabinWindows:
     count: int
 
 
+@dataclass(frozen=True)
+class Deckhouse:
+    """Wrapper around the enclosed DS deckhouse PartDesign::Body (spec 016).
+
+    Built only in the ``ds`` superstructure variant; replaces the open-
+    flybridge cabin trunk + windshield + hardtop + pillars. The blind window
+    recesses are Pocket features on ``body``. Length fields in meters at the
+    wrapper boundary (matching the spec 003/008 wrappers; geometry in mm).
+
+    Example:
+        >>> # Accessed via Deck.deckhouse after build_deck(superstructure_variant="ds").
+    """
+
+    body: Any
+    length: float
+    forward_width: float
+    aft_width: float
+    height: float
+    window_count: int
+
+
 # ---------------------------------------------------------------------------
 # Return aggregate (data-model §3)
 # ---------------------------------------------------------------------------
@@ -1203,10 +1352,12 @@ class Deck:
     label: str
     build_duration_seconds: float
     deck_plate: DeckPlate
-    cabin_trunk: CabinTrunk
-    windshield: Windshield
-    hardtop: Hardtop
-    hardtop_pillars: HardtopPillars
+    # Spec 016 — the four open-flybridge bodies are None in the "ds" variant
+    # (replaced by `deckhouse`); populated as before in the "standard" variant.
+    cabin_trunk: CabinTrunk | None
+    windshield: Windshield | None
+    hardtop: Hardtop | None
+    hardtop_pillars: HardtopPillars | None
     railings: Railings
     # Spec 010 — deck hardware (appended after the six superstructure bodies
     # so existing field order is preserved; Deck is only constructed inside
@@ -1218,8 +1369,13 @@ class Deck:
     cleats: Cleats
     parameters_hardware: DeckHardwareParameters
     # spec 011 — glazing (appended; Deck is only constructed inside build_deck).
-    cabin_windows: CabinWindows
+    # spec 016 — None in the "ds" variant (no cabin trunk to cut windows into).
+    cabin_windows: CabinWindows | None
     parameters_glazing: DeckGlazingParameters
+    # spec 016 — DS variant: the selected silhouette + the enclosed deckhouse
+    # (populated iff superstructure_variant == "ds"; None in "standard").
+    superstructure_variant: str = "standard"
+    deckhouse: Deckhouse | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -2869,6 +3025,224 @@ def _build_lifelines(
 
 
 # ---------------------------------------------------------------------------
+# Spec 016 — DS-variant deckhouse builders (data-model §4.2)
+# ---------------------------------------------------------------------------
+
+
+def _validate_cross_hull_deckhouse(hull: Hull, dh: DeckhouseParameters) -> None:
+    """FR-012: the DS deckhouse must fit within the hull before construction.
+
+    HullParameters are in meters; DeckhouseParameters in mm — compare in mm.
+    """
+    hp = hull.parameters
+    loa_mm = hp.loa * _MM_PER_M
+    beam_mm = hp.beam_max * _MM_PER_M
+    if dh.fwd_offset + dh.length > loa_mm:
+        raise DeckParameterError(
+            "deckhouse_fwd_offset+length<>hull.loa",
+            None,
+            f"deckhouse fwd_offset + length ({dh.fwd_offset + dh.length:.0f} mm) "
+            f"must not exceed hull LOA ({loa_mm:.0f} mm)",
+        )
+    if dh.aft_width + 2.0 * dh.wall_inset > beam_mm:
+        raise DeckParameterError(
+            "deckhouse_aft_width+walls<>hull.beam_max",
+            None,
+            f"deckhouse aft_width + 2*wall_inset ({dh.aft_width + 2.0 * dh.wall_inset:.0f} mm) "
+            f"must not exceed hull beam_max ({beam_mm:.0f} mm)",
+        )
+
+
+def _build_deckhouse(
+    hull: Hull,
+    deck_plate: DeckPlate,
+    dh: DeckhouseParameters,
+    target_doc: Any,
+    added: list[Any],
+) -> Deckhouse:
+    """Build the enclosed DS deckhouse as a PartDesign::Body (spec 016 FR-003..005).
+
+    Mirrors :func:`_build_cabin_trunk`: two trapezoidal sketches on XY-parallel
+    datums (lower at the sampled deck-plate top, upper at deck top + height)
+    are lofted into a single filled solid (Ruled=True). The upper forward edge
+    is shifted aft by ``height * tan(front_rake)`` to rake the front wall; the
+    aft wall stays vertical and the side taper comes from forward_width <=
+    aft_width. The top face of the loft is the flat roof; the result is a
+    manifold solid (Solids == 1) by construction (the spec 009 guard).
+    """
+    import FreeCAD
+    import Part
+
+    deck_bb = deck_plate.body.Shape.BoundBox
+    fwd_x_mm = deck_bb.XMin + dh.fwd_offset
+    aft_x_mm = fwd_x_mm + dh.length
+    deck_top_z_mm = _resolve_deck_top_z_at(deck_plate, (fwd_x_mm + aft_x_mm) / 2.0)
+    upper_z_mm = deck_top_z_mm + dh.height_above_deck
+    front_rake_dx = dh.height_above_deck * math.tan(math.radians(dh.front_rake_angle))
+    fw = dh.forward_width / 2.0
+    aw = dh.aft_width / 2.0
+
+    body = target_doc.addObject("PartDesign::Body", "Deck_Deckhouse")
+    added.append(body)
+    target_doc.recompute()
+
+    lower_datum = _pd_make_datum_xy(body, "DeckhouseLowerDatum", deck_top_z_mm, added)
+    upper_datum = _pd_make_datum_xy(body, "DeckhouseUpperDatum", upper_z_mm, added)
+
+    def _trapezoid_sketch(name: str, datum: Any, fx: float, ax: float) -> Any:
+        sketch = body.newObject("Sketcher::SketchObject", name)
+        added.append(sketch)
+        sketch.AttachmentSupport = [(datum, "")]
+        sketch.MapMode = "FlatFace"
+        pts = [
+            FreeCAD.Vector(fx, -fw, 0),
+            FreeCAD.Vector(fx, fw, 0),
+            FreeCAD.Vector(ax, aw, 0),
+            FreeCAD.Vector(ax, -aw, 0),
+        ]
+        line_ids: list[int] = []
+        for i in range(4):
+            j = (i + 1) % 4
+            line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+        _pd_close_loop_constraints(sketch, line_ids)
+        return sketch
+
+    lower_sketch = _trapezoid_sketch("DeckhouseLowerSketch", lower_datum, fwd_x_mm, aft_x_mm)
+    upper_sketch = _trapezoid_sketch(
+        "DeckhouseUpperSketch", upper_datum, fwd_x_mm + front_rake_dx, aft_x_mm
+    )
+    target_doc.recompute()
+
+    loft = body.newObject("PartDesign::AdditiveLoft", "DeckhouseLoft")
+    added.append(loft)
+    loft.Profile = (lower_sketch, [""])
+    loft.Sections = [(upper_sketch, [""])]
+    loft.Ruled = True
+    loft.Closed = False
+    target_doc.recompute()
+
+    body.addProperty("App::PropertyLength", "DeckhouseLength", "Deck", "Deckhouse length")
+    body.addProperty(
+        "App::PropertyLength", "DeckhouseHeight", "Deck", "Deckhouse height above deck"
+    )
+    body.DeckhouseLength = dh.length
+    body.DeckhouseHeight = dh.height_above_deck
+
+    return Deckhouse(
+        body=body,
+        length=dh.length / _MM_PER_M,
+        forward_width=dh.forward_width / _MM_PER_M,
+        aft_width=dh.aft_width / _MM_PER_M,
+        height=dh.height_above_deck / _MM_PER_M,
+        window_count=0,
+    )
+
+
+def _cut_deckhouse_windows(
+    deckhouse: Deckhouse,
+    win: DsWindowParameters,
+    target_doc: Any,
+    added: list[Any],
+) -> Deckhouse:
+    """Cut blind wraparound side-window recesses into the deckhouse (spec 016 FR-006).
+
+    Mirrors :func:`_cut_cabin_windows`: ``count_per_side`` rectangular
+    ``PartDesign::Pocket`` recesses per side on XZ-parallel datums (normal =
+    global Y) at the deckhouse side outer-Y, depth ``recess_depth`` toward the
+    centerline. Blind by construction (recess_depth < half-width), so the
+    deckhouse stays a single manifold solid. Zero count → no cuts. The raked
+    front face itself reads as the windscreen; a separate front-face recess is
+    deferred (novel rotated-datum geometry).
+
+    Raises :class:`DeckParameterError` if the recess would reach the far side
+    or the opening would not fit the wall.
+    """
+    import FreeCAD
+    import Part
+
+    body = deckhouse.body
+    if win.count_per_side == 0:
+        return deckhouse
+
+    bb = body.Shape.BoundBox
+    half_width = bb.YLength / 2.0
+    if win.recess_depth >= half_width:
+        raise DeckParameterError(
+            "ds_window_recess_depth<>wall",
+            win.recess_depth,
+            f"< deckhouse half-width ({half_width:.0f} mm) so the recess stays blind",
+        )
+    length_avail = bb.XLength
+    height_avail = bb.ZLength
+    if win.length >= length_avail or win.height >= height_avail:
+        raise DeckParameterError(
+            "ds_window_opening<>wall",
+            None,
+            f"window {win.length:.0f}x{win.height:.0f} mm must fit within the "
+            f"deckhouse wall ({length_avail:.0f}x{height_avail:.0f} mm)",
+        )
+
+    lo, hi = bb.XMin + 0.12 * length_avail, bb.XMax - 0.12 * length_avail
+    if win.count_per_side == 1:
+        x_stations = [(lo + hi) / 2.0]
+    else:
+        step = (hi - lo) / (win.count_per_side - 1)
+        x_stations = [lo + i * step for i in range(win.count_per_side)]
+    cz = (bb.ZMin + bb.ZMax) / 2.0
+    outer_y = bb.YMax
+    half_l = win.length / 2.0
+    half_h = win.height / 2.0
+
+    xz_plane = _pd_get_origin_plane(body, "XZ_Plane")
+    count = 0
+    for x_mm in x_stations:
+        for side, sign in (("Port", 1.0), ("Starboard", -1.0)):
+            count += 1
+            datum = body.newObject("PartDesign::Plane", f"DeckhouseWindowDatum{side}{count}")
+            added.append(datum)
+            datum.AttachmentSupport = [(xz_plane, "")]
+            datum.MapMode = "FlatFace"
+            datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(x_mm, cz, sign * (outer_y + 2.0)),
+                FreeCAD.Rotation(),
+            )
+            sketch = body.newObject(
+                "Sketcher::SketchObject", f"DeckhouseWindowSketch{side}{count}"
+            )
+            added.append(sketch)
+            sketch.AttachmentSupport = [(datum, "")]
+            sketch.MapMode = "FlatFace"
+            pts = [
+                FreeCAD.Vector(-half_l, -half_h, 0),
+                FreeCAD.Vector(half_l, -half_h, 0),
+                FreeCAD.Vector(half_l, half_h, 0),
+                FreeCAD.Vector(-half_l, half_h, 0),
+            ]
+            line_ids: list[int] = []
+            for i in range(4):
+                j = (i + 1) % 4
+                line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+            _pd_close_loop_constraints(sketch, line_ids)
+            pocket = body.newObject(
+                "PartDesign::Pocket", f"DeckhouseWindowPocket{side}{count}"
+            )
+            added.append(pocket)
+            pocket.Profile = (sketch, [""])
+            pocket.Length = win.recess_depth + 2.0
+            pocket.Reversed = sign > 0.0  # cut toward the centerline
+            pocket.Midplane = False
+
+    return Deckhouse(
+        body=body,
+        length=deckhouse.length,
+        forward_width=deckhouse.forward_width,
+        aft_width=deckhouse.aft_width,
+        height=deckhouse.height,
+        window_count=count,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public builder (FR-001 + contracts/python-api.md)
 # ---------------------------------------------------------------------------
 
@@ -2877,7 +3251,9 @@ def build_deck(
     hull: Hull,
     parameters: DeckParameters | None = None,
     *,
+    superstructure_variant: Literal["standard", "ds"] = "standard",
     parameters_superstructure: DeckSuperstructureParameters | None = None,
+    parameters_deckhouse: DeckhouseParameters | None = None,
     parameters_hardware: DeckHardwareParameters | None = None,
     parameters_glazing: DeckGlazingParameters | None = None,
     document: Any = None,
@@ -2893,10 +3269,20 @@ def build_deck(
             use :class:`DeckParameters` defaults (Storebro RC34 1972
             estimate-grade values). Mutually exclusive with
             ``parameters_superstructure``.
+        superstructure_variant: Which topsides silhouette to build —
+            ``"standard"`` (spec 008 open flybridge: cabin trunk + windshield +
+            hardtop + pillars, the default) or ``"ds"`` (spec 016 enclosed deck
+            saloon: a single :class:`Deckhouse` solid). The deck plate,
+            railings, and all hardware are shared by both variants.
         parameters_superstructure: Spec 008 per-component composite. When
             non-None, takes precedence over ``parameters`` for the
             superstructure shape; the deck plate still derives from the
-            legacy fields. Mutually exclusive with ``parameters``.
+            legacy fields. Mutually exclusive with ``parameters``. Forbidden
+            together with ``superstructure_variant="ds"`` (the DS variant has
+            no open-flybridge superstructure).
+        parameters_deckhouse: Spec 016 DS deckhouse composite. ``None`` → use
+            :class:`DeckhouseParameters` defaults. Only consulted when
+            ``superstructure_variant="ds"``.
         parameters_hardware: Spec 010 deck-hardware composite (rubrail, bow
             pulpit, lifelines, anchor locker, cleats). ``None`` → use
             :class:`DeckHardwareParameters` defaults, so existing callers get
@@ -2929,7 +3315,27 @@ def build_deck(
         >>> # deck = build_deck(build_hull())
         >>> # deck.cabin_trunk.length  # doctest: +SKIP
         >>> # 4.5
+        >>> # DS enclosed deck saloon (styrhytt) — one deckhouse, no flybridge:
+        >>> # ds = build_deck(build_hull(), superstructure_variant="ds")  # doctest: +SKIP
+        >>> # ds.deckhouse is not None and ds.cabin_trunk is None  # doctest: +SKIP
+        >>> # True
     """
+    # spec 016 — variant selector guards (before ANY FreeCAD call, so they are
+    # unit-testable without a FreeCAD runtime and fail fast on contradictions).
+    if superstructure_variant not in ("standard", "ds"):
+        raise DeckParameterError(
+            "superstructure_variant",
+            None,
+            "one of {'standard', 'ds'}",
+        )
+    if superstructure_variant == "ds" and parameters_superstructure is not None:
+        raise DeckParameterError(
+            "superstructure_variant<>parameters_superstructure",
+            None,
+            "the 'ds' variant has no open-flybridge superstructure — do not pass "
+            "parameters_superstructure (use parameters_deckhouse instead)",
+        )
+
     _ensure_freecad_supported()
     _validate_hull(hull)
 
@@ -2943,6 +3349,11 @@ def build_deck(
     resolved_params = parameters if parameters is not None else DeckParameters()
     _validate_deck_parameters(resolved_params)
     _validate_cross_hull_constraints(hull, resolved_params)
+
+    # spec 016 — resolve + validate the DS deckhouse composite (DS variant only).
+    dh = parameters_deckhouse if parameters_deckhouse is not None else DeckhouseParameters()
+    if superstructure_variant == "ds":
+        _validate_cross_hull_deckhouse(hull, dh)
 
     # Resolve the new sub-dataclass composite. If the caller passed an
     # explicit `parameters_superstructure`, use it; otherwise translate
@@ -2963,52 +3374,108 @@ def build_deck(
 
     started = time.perf_counter()
     added: list[Any] = []
+    # spec 016 — the four open-flybridge bodies + cabin windows exist only in
+    # the standard variant; the deckhouse exists only in the ds variant.
+    cabin_trunk: CabinTrunk | None = None
+    windshield: Windshield | None = None
+    hardtop: Hardtop | None = None
+    hardtop_pillars: HardtopPillars | None = None
+    cabin_windows: CabinWindows | None = None
+    deckhouse: Deckhouse | None = None
     try:
         deck_plate = _build_deck_plate(hull, resolved_params, target_doc, added)
-        cabin_trunk = _build_cabin_trunk(
-            hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
-        )
-        windshield = _build_windshield(
-            hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp, glazing=glz
-        )
-        hardtop = _build_hardtop(
-            hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp
-        )
-        hardtop_pillars = _build_hardtop_pillars(
-            hull,
-            resolved_params,
-            hardtop,
-            deck_plate,
-            target_doc,
-            added,
-            superstructure=sp,
-        )
-        railings = _build_railings(
-            hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
-        )
-        target_doc.recompute()
+        if superstructure_variant == "ds":
+            # Enclosed DS deck saloon: one filled deckhouse solid replaces the
+            # cabin trunk + windshield + hardtop + pillars.
+            deckhouse = _build_deckhouse(hull, deck_plate, dh, target_doc, added)
+            deckhouse = _cut_deckhouse_windows(deckhouse, dh.windows, target_doc, added)
+            railings = _build_railings(
+                hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
+            )
+            target_doc.recompute()
 
-        # Spec 010 — deck hardware. Cross-deck collision checks run now that
-        # the deck plate + cabin trunk geometry exists; they raise
-        # DeckParameterError (caught + rolled back below). Build order per
-        # plan §Build Sequence; lifelines LAST (they need the railing).
-        _validate_cross_deck_hardware(deck_plate, cabin_trunk, hw)
-        rubrail = _build_rubrail(hull, deck_plate, target_doc, added, hardware=hw)
-        bow_pulpit = _build_bow_pulpit(hull, deck_plate, target_doc, added, hardware=hw)
-        anchor_locker = _build_anchor_locker(
-            deck_plate, cabin_trunk, target_doc, added, hardware=hw
-        )
-        cleats = _build_cleats(hull, deck_plate, target_doc, added, hardware=hw)
-        lifelines = _build_lifelines(deck_plate, target_doc, added, hardware=hw, superstructure=sp)
+            # The cabin-trunk-shaped hardware checks treat the deckhouse as the
+            # obstruction the anchor locker must clear; adapt it via a CabinTrunk
+            # wrapper (both helpers only read `.body.Shape.BoundBox`).
+            obstruction = CabinTrunk(
+                body=deckhouse.body,
+                length=deckhouse.length,
+                width=(deckhouse.forward_width + deckhouse.aft_width) / 2.0,
+                height=deckhouse.height,
+                corner_radius=0.0,
+            )
+            # The long DS deckhouse overruns the standard anchor-locker default
+            # (tuned for the shorter cabin trunk); when the caller did not
+            # override hardware, reposition the locker onto the foredeck forward
+            # of the deckhouse so the default DS build does not self-collide.
+            if parameters_hardware is None:
+                deck_xmax = deck_plate.body.Shape.BoundBox.XMax
+                house_xmax = deckhouse.body.Shape.BoundBox.XMax
+                foredeck_mid = (house_xmax + deck_xmax) / 2.0
+                hw = replace(
+                    hw, anchor_locker=replace(hw.anchor_locker, center_x=foredeck_mid)
+                )
 
-        # Spec 011 — cabin-trunk side windows (cut last, after every consumer
-        # of the trunk geometry has read it), then the manifold guards (FR-008).
-        cabin_windows = _cut_cabin_windows(cabin_trunk, glz, target_doc, added)
-        target_doc.recompute()
-        _assert_solid_manifold(cabin_trunk.body, "cabin trunk")
-        if glz.windshield.enabled:
-            _assert_solid_manifold(windshield.body, "windshield frame")
-        target_doc.recompute()
+            _validate_cross_deck_hardware(deck_plate, obstruction, hw)
+            rubrail = _build_rubrail(hull, deck_plate, target_doc, added, hardware=hw)
+            bow_pulpit = _build_bow_pulpit(hull, deck_plate, target_doc, added, hardware=hw)
+            anchor_locker = _build_anchor_locker(
+                deck_plate, obstruction, target_doc, added, hardware=hw
+            )
+            cleats = _build_cleats(hull, deck_plate, target_doc, added, hardware=hw)
+            lifelines = _build_lifelines(
+                deck_plate, target_doc, added, hardware=hw, superstructure=sp
+            )
+            target_doc.recompute()
+            _assert_solid_manifold(deckhouse.body, "deckhouse")
+            target_doc.recompute()
+        else:
+            cabin_trunk = _build_cabin_trunk(
+                hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
+            )
+            windshield = _build_windshield(
+                hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp, glazing=glz
+            )
+            hardtop = _build_hardtop(
+                hull, resolved_params, cabin_trunk, target_doc, added, superstructure=sp
+            )
+            hardtop_pillars = _build_hardtop_pillars(
+                hull,
+                resolved_params,
+                hardtop,
+                deck_plate,
+                target_doc,
+                added,
+                superstructure=sp,
+            )
+            railings = _build_railings(
+                hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
+            )
+            target_doc.recompute()
+
+            # Spec 010 — deck hardware. Cross-deck collision checks run now that
+            # the deck plate + cabin trunk geometry exists; they raise
+            # DeckParameterError (caught + rolled back below). Build order per
+            # plan §Build Sequence; lifelines LAST (they need the railing).
+            _validate_cross_deck_hardware(deck_plate, cabin_trunk, hw)
+            rubrail = _build_rubrail(hull, deck_plate, target_doc, added, hardware=hw)
+            bow_pulpit = _build_bow_pulpit(hull, deck_plate, target_doc, added, hardware=hw)
+            anchor_locker = _build_anchor_locker(
+                deck_plate, cabin_trunk, target_doc, added, hardware=hw
+            )
+            cleats = _build_cleats(hull, deck_plate, target_doc, added, hardware=hw)
+            lifelines = _build_lifelines(
+                deck_plate, target_doc, added, hardware=hw, superstructure=sp
+            )
+
+            # Spec 011 — cabin-trunk side windows (cut last, after every consumer
+            # of the trunk geometry has read it), then the manifold guards (FR-008).
+            cabin_windows = _cut_cabin_windows(cabin_trunk, glz, target_doc, added)
+            target_doc.recompute()
+            _assert_solid_manifold(cabin_trunk.body, "cabin trunk")
+            if glz.windshield.enabled:
+                _assert_solid_manifold(windshield.body, "windshield frame")
+            target_doc.recompute()
     except DeckParameterError:
         _rollback(target_doc, added)
         raise
@@ -3030,10 +3497,6 @@ def build_deck(
 
     _render_targets: list[Any] = [
         deck_plate.body,
-        cabin_trunk.body,
-        windshield.body,
-        hardtop.body,
-        hardtop_pillars.body,
         railings.body,
         rubrail.body,
         bow_pulpit.body,
@@ -3041,8 +3504,20 @@ def build_deck(
         anchor_locker.body,
         cleats.body,
     ]
-    if windshield.glass_pane is not None:
-        _render_targets.append(windshield.glass_pane.body)
+    if deckhouse is not None:
+        # spec 016 — the deckhouse colours white via the "Deck_Deckhouse"
+        # render role (see render._ROLE_RULES).
+        _render_targets.append(deckhouse.body)
+    if cabin_trunk is not None:
+        _render_targets.append(cabin_trunk.body)
+    if windshield is not None:
+        _render_targets.append(windshield.body)
+        if windshield.glass_pane is not None:
+            _render_targets.append(windshield.glass_pane.body)
+    if hardtop is not None:
+        _render_targets.append(hardtop.body)
+    if hardtop_pillars is not None:
+        _render_targets.append(hardtop_pillars.body)
     _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
@@ -3066,4 +3541,6 @@ def build_deck(
         parameters_hardware=hw,
         cabin_windows=cabin_windows,
         parameters_glazing=glz,
+        superstructure_variant=superstructure_variant,
+        deckhouse=deckhouse,
     )

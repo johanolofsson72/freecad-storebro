@@ -109,6 +109,7 @@ _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Deck_Pillar", "metal"),
     ("Deck_DeckPlate", "superstructure"),
     ("Deck_CabinTrunk", "superstructure"),
+    ("Deck_Deckhouse", "superstructure"),
     ("Deck_Hardtop", "superstructure"),
     ("Deck_AnchorLocker", "superstructure"),
     ("HullBody", "hull"),
