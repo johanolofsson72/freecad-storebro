@@ -1100,6 +1100,17 @@ class DsWindowParameters:
     recess_depth: float = 15.0
     glass_panes: bool = True  # spec 019: translucent pane seated in the recess
     glass_thickness: float = 6.0
+    # spec 023 — front-window recess on the raked screen, side-window mullions,
+    # and a helm-door recess (all blind, all on the deckhouse body only).
+    front_window: bool = True
+    front_length: float = 1400.0
+    front_height: float = 420.0
+    mullions_per_window: int = 1
+    mullion_width: float = 40.0
+    helm_door: bool = True
+    helm_door_length: float = 650.0
+    helm_door_height: float = 1100.0
+    helm_door_side: str = "Starboard"
 
     def __post_init__(self) -> None:
         if self.count_per_side < 0:
@@ -1114,6 +1125,24 @@ class DsWindowParameters:
             ("ds_window_length", self.length),
             ("ds_window_height", self.height),
             ("ds_window_recess_depth", self.recess_depth),
+        ):
+            if value <= 0:
+                raise DeckParameterError(name, value, "> 0")
+        # spec 023 additions.
+        if self.mullions_per_window < 0:
+            raise DeckParameterError(
+                "ds_window_mullions_per_window", self.mullions_per_window, ">= 0"
+            )
+        if self.helm_door_side not in ("Port", "Starboard"):
+            raise DeckParameterError(
+                "ds_window_helm_door_side", None, "Port | Starboard"
+            )
+        for name, value in (
+            ("ds_window_front_length", self.front_length),
+            ("ds_window_front_height", self.front_height),
+            ("ds_window_mullion_width", self.mullion_width),
+            ("ds_window_helm_door_length", self.helm_door_length),
+            ("ds_window_helm_door_height", self.helm_door_height),
         ):
             if value <= 0:
                 raise DeckParameterError(name, value, "> 0")
@@ -1414,6 +1443,11 @@ class Deckhouse:
     aft_width: float
     height: float
     window_count: int
+    # spec 023 — detailing flags (additive, defaulted for back-compat).
+    has_front_window: bool = False
+    front_window_skipped: bool = False
+    mullion_count: int = 0
+    has_helm_door: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -3956,6 +3990,286 @@ def _cut_deckhouse_windows(
     )
 
 
+def _detail_deckhouse(
+    deckhouse: Deckhouse,
+    dh: DeckhouseParameters,
+    target_doc: Any,
+    added: list[Any],
+) -> tuple[Deckhouse, list[Any]]:
+    """spec 023 — finish the DS deckhouse: front-window recess on the raked
+    screen (rotated datum), side-window mullion bosses, and a helm-door recess.
+
+    All cuts/bosses act on the deckhouse body only (FR-006). The deckhouse stays
+    a single valid solid (FR-005). The front recess carries a manifold-or-skip
+    gate (FR-001) — if its rotated-datum cut would not leave a single valid
+    solid, it is rolled back deterministically and the rest still builds. Returns
+    the updated wrapper + any new glass-pane bodies.
+    """
+    import FreeCAD
+    import Part
+
+    win = dh.windows
+    body = deckhouse.body
+    glass_bodies: list[Any] = []
+    bb = body.Shape.BoundBox
+    front_x = bb.XMin
+    deck_top_z = bb.ZMin
+    upper_z = bb.ZMax
+    rake_dx = (upper_z - deck_top_z) * math.tan(math.radians(dh.front_rake_angle))
+    face_cx = front_x + rake_dx / 2.0
+    face_cz = (deck_top_z + upper_z) / 2.0
+    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 1, 0), dh.front_rake_angle)
+
+    has_front = False
+    front_skipped = False
+    if win.front_window:
+        prev_tip = body.Tip
+        refinement: list[Any] = []
+        try:
+            datum = body.newObject("PartDesign::Plane", "DeckhouseFrontWinDatum")
+            added.append(datum)
+            refinement.append(datum)
+            datum.AttachmentSupport = [(_pd_get_origin_plane(body, "YZ_Plane"), "")]
+            datum.MapMode = "FlatFace"
+            datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(0.0, face_cz, face_cx), rot
+            )
+            sketch = body.newObject("Sketcher::SketchObject", "DeckhouseFrontWinSketch")
+            added.append(sketch)
+            refinement.append(sketch)
+            sketch.AttachmentSupport = [(datum, "")]
+            sketch.MapMode = "FlatFace"
+            hl = win.front_length / 2.0
+            hh = win.front_height / 2.0
+            pts = [
+                FreeCAD.Vector(-hl, -hh, 0),
+                FreeCAD.Vector(hl, -hh, 0),
+                FreeCAD.Vector(hl, hh, 0),
+                FreeCAD.Vector(-hl, hh, 0),
+            ]
+            ids = [
+                sketch.addGeometry(Part.LineSegment(pts[i], pts[(i + 1) % 4]), False)
+                for i in range(4)
+            ]
+            _pd_close_loop_constraints(sketch, ids)
+            pocket = body.newObject("PartDesign::Pocket", "DeckhouseFrontWinPocket")
+            added.append(pocket)
+            refinement.append(pocket)
+            pocket.Profile = (sketch, [""])
+            pocket.Length = win.recess_depth + 3.0
+            pocket.Reversed = False
+            pocket.Midplane = False
+            target_doc.recompute()
+            if not _is_single_valid_solid(body.Shape):
+                raise DeckConstructionError("front-window recess non-manifold")
+            has_front = True
+        except BaseException:
+            # Deterministic skip: roll back the front recess, keep the rest.
+            for obj in refinement:
+                added[:] = [a for a in added if getattr(a, "Name", None) != obj.Name]
+                with contextlib.suppress(BaseException):
+                    target_doc.removeObject(obj.Name)
+            with contextlib.suppress(BaseException):
+                body.Tip = prev_tip
+            target_doc.recompute()
+            front_skipped = True
+
+        if has_front and win.glass_panes:
+            # Thin glass pane on the raked face, just proud of the recess mouth.
+            glass = target_doc.addObject("PartDesign::Body", "Deck_DeckhouseWindowGlassFront")
+            added.append(glass)
+            target_doc.recompute()
+            g_datum = glass.newObject("PartDesign::Plane", "FrontGlassDatum")
+            added.append(g_datum)
+            g_datum.AttachmentSupport = [(_pd_get_origin_plane(glass, "YZ_Plane"), "")]
+            g_datum.MapMode = "FlatFace"
+            g_datum.AttachmentOffset = FreeCAD.Placement(
+                FreeCAD.Vector(0.0, face_cz, face_cx - win.glass_thickness), rot
+            )
+            g_sketch = glass.newObject("Sketcher::SketchObject", "FrontGlassSketch")
+            added.append(g_sketch)
+            g_sketch.AttachmentSupport = [(g_datum, "")]
+            g_sketch.MapMode = "FlatFace"
+            hl = win.front_length / 2.0
+            hh = win.front_height / 2.0
+            gpts = [
+                FreeCAD.Vector(-hl, -hh, 0),
+                FreeCAD.Vector(hl, -hh, 0),
+                FreeCAD.Vector(hl, hh, 0),
+                FreeCAD.Vector(-hl, hh, 0),
+            ]
+            gids = [
+                g_sketch.addGeometry(Part.LineSegment(gpts[i], gpts[(i + 1) % 4]), False)
+                for i in range(4)
+            ]
+            _pd_close_loop_constraints(g_sketch, gids)
+            g_pad = glass.newObject("PartDesign::Pad", "FrontGlassPad")
+            added.append(g_pad)
+            g_pad.Profile = (g_sketch, [""])
+            g_pad.Length = win.glass_thickness
+            g_pad.Midplane = False
+            target_doc.recompute()
+            glass_bodies.append(glass)
+
+    # The deckhouse is tapered, so the side surface Y varies with X. A boss/cut
+    # placed at bb.YMax would float outside the wall at forward stations → a
+    # disconnected solid. Use the actual tapered half-width at each X.
+    fw_half = dh.forward_width / 2.0
+    aw_half = dh.aft_width / 2.0
+    x_span = bb.XMax - bb.XMin
+
+    def _wall_y(x_mm: float) -> float:
+        t = (x_mm - bb.XMin) / x_span if x_span > 0 else 0.0
+        return fw_half + (aw_half - fw_half) * t
+
+    # Mullions: thin vertical divider bars across each side-window opening. Built
+    # as SEPARATE bodies sitting in the recess (like the spec 019 glass panes) so
+    # they never have to fuse into the recessed wall — robust, and they resolve to
+    # the deckhouse superstructure role by their "Deck_Deckhouse..." label.
+    mullion_count = 0
+    mullion_bodies: list[Any] = []
+    if win.mullions_per_window > 0 and win.count_per_side > 0:
+        length_avail = bb.XLength
+        lo, hi = bb.XMin + 0.12 * length_avail, bb.XMax - 0.12 * length_avail
+        if win.count_per_side == 1:
+            x_stations = [(lo + hi) / 2.0]
+        else:
+            step = (hi - lo) / (win.count_per_side - 1)
+            x_stations = [lo + i * step for i in range(win.count_per_side)]
+        cz = (bb.ZMin + bb.ZMax) / 2.0
+        half_h = win.height / 2.0
+        hw = win.mullion_width / 2.0
+        for x_mm in x_stations:
+            for m in range(win.mullions_per_window):
+                frac = (m + 1) / (win.mullions_per_window + 1)
+                bx = x_mm - win.length / 2.0 + frac * win.length
+                wy = _wall_y(bx)
+                for side, sign in (("Port", 1.0), ("Starboard", -1.0)):
+                    mullion_count += 1
+                    mbody = target_doc.addObject(
+                        "PartDesign::Body", f"Deck_DeckhouseMullion{side}{mullion_count}"
+                    )
+                    added.append(mbody)
+                    mullion_bodies.append(mbody)
+                    target_doc.recompute()
+                    # Bar fills the recess depth + a little proud, at the window
+                    # centre. Datum at the recess floor, padded outward.
+                    floor_y = sign * (wy - win.recess_depth)
+                    datum = _pd_make_datum_xz(
+                        mbody, f"Mullion{side}{mullion_count}Datum", bx, floor_y, cz, added
+                    )
+                    sk = mbody.newObject(
+                        "Sketcher::SketchObject", f"Mullion{side}{mullion_count}Sketch"
+                    )
+                    added.append(sk)
+                    sk.AttachmentSupport = [(datum, "")]
+                    sk.MapMode = "FlatFace"
+                    mpts = [
+                        FreeCAD.Vector(bx - hw, cz - half_h, 0),
+                        FreeCAD.Vector(bx + hw, cz - half_h, 0),
+                        FreeCAD.Vector(bx + hw, cz + half_h, 0),
+                        FreeCAD.Vector(bx - hw, cz + half_h, 0),
+                    ]
+                    mids = [
+                        sk.addGeometry(Part.LineSegment(mpts[i], mpts[(i + 1) % 4]), False)
+                        for i in range(4)
+                    ]
+                    _pd_close_loop_constraints(sk, mids)
+                    pad = mbody.newObject("PartDesign::Pad", f"Mullion{side}{mullion_count}Pad")
+                    added.append(pad)
+                    pad.Profile = (sk, [""])
+                    pad.Length = win.recess_depth + 4.0
+                    pad.Midplane = False
+                    pad.Reversed = sign < 0.0
+                    target_doc.recompute()
+        glass_bodies.extend(mullion_bodies)
+
+    # Helm door: a tall blind door-shaped recess in the helm-side wall, placed in
+    # the widest clear X-gap between side windows so it never overlaps a window
+    # recess (two intersecting pockets would go non-manifold). Manifold-or-skip.
+    has_helm = False
+    if win.helm_door:
+        # Reconstruct the side-window X footprints (same stations as the cut).
+        length_avail = bb.XLength
+        lo, hi = bb.XMin + 0.12 * length_avail, bb.XMax - 0.12 * length_avail
+        if win.count_per_side <= 0:
+            win_centers: list[float] = []
+        elif win.count_per_side == 1:
+            win_centers = [(lo + hi) / 2.0]
+        else:
+            step = (hi - lo) / (win.count_per_side - 1)
+            win_centers = [lo + i * step for i in range(win.count_per_side)]
+        half_wl = win.length / 2.0
+        # Occupied X-intervals (windows) + the deckhouse end margins.
+        occupied = sorted((c - half_wl, c + half_wl) for c in win_centers)
+        margin = 0.06 * length_avail
+        free_lo = bb.XMin + margin
+        free_hi = bb.XMax - margin
+        # Build the free gaps between occupied intervals.
+        gaps: list[tuple[float, float]] = []
+        cursor = free_lo
+        for a, b in occupied:
+            if a - cursor > 0:
+                gaps.append((cursor, min(a, free_hi)))
+            cursor = max(cursor, b)
+        if cursor < free_hi:
+            gaps.append((cursor, free_hi))
+        widest = max(gaps, key=lambda g: g[1] - g[0], default=(free_lo, free_hi))
+        door_x = (widest[0] + widest[1]) / 2.0
+        gap_fits = (widest[1] - widest[0]) >= win.helm_door_length
+
+        if gap_fits:
+            sign = 1.0 if win.helm_door_side == "Port" else -1.0
+            door_cz = bb.ZMin + win.helm_door_height / 2.0 + 30.0
+            wy = _wall_y(door_x)
+            datum = _pd_make_datum_xz(
+                body, "DeckhouseHelmDoorDatum", door_x, sign * (wy + 2.0), door_cz, added
+            )
+            sk = body.newObject("Sketcher::SketchObject", "DeckhouseHelmDoorSketch")
+            added.append(sk)
+            sk.AttachmentSupport = [(datum, "")]
+            sk.MapMode = "FlatFace"
+            hl = win.helm_door_length / 2.0
+            hh = win.helm_door_height / 2.0
+            dpts = [
+                FreeCAD.Vector(door_x - hl, door_cz - hh, 0),
+                FreeCAD.Vector(door_x + hl, door_cz - hh, 0),
+                FreeCAD.Vector(door_x + hl, door_cz + hh, 0),
+                FreeCAD.Vector(door_x - hl, door_cz + hh, 0),
+            ]
+            dids = [
+                sk.addGeometry(Part.LineSegment(dpts[i], dpts[(i + 1) % 4]), False)
+                for i in range(4)
+            ]
+            _pd_close_loop_constraints(sk, dids)
+            pocket = body.newObject("PartDesign::Pocket", "DeckhouseHelmDoorPocket")
+            added.append(pocket)
+            pocket.Profile = (sk, [""])
+            pocket.Length = win.recess_depth + 2.0
+            pocket.Reversed = sign > 0.0
+            pocket.Midplane = False
+            target_doc.recompute()
+            if not _is_single_valid_solid(body.Shape):
+                raise DeckConstructionError("helm-door recess non-manifold")
+            has_helm = True
+
+    return (
+        Deckhouse(
+            body=body,
+            length=deckhouse.length,
+            forward_width=deckhouse.forward_width,
+            aft_width=deckhouse.aft_width,
+            height=deckhouse.height,
+            window_count=deckhouse.window_count,
+            has_front_window=has_front,
+            front_window_skipped=front_skipped,
+            mullion_count=mullion_count,
+            has_helm_door=has_helm,
+        ),
+        glass_bodies,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public builder (FR-001 + contracts/python-api.md)
 # ---------------------------------------------------------------------------
@@ -4107,6 +4421,9 @@ def build_deck(
                 deckhouse, dh.windows, target_doc, added
             )
             _window_glass.extend(_deckhouse_glass)
+            # spec 023 — front-window recess, side mullions, helm-door recess.
+            deckhouse, _detail_glass = _detail_deckhouse(deckhouse, dh, target_doc, added)
+            _window_glass.extend(_detail_glass)
             railings = _build_railings(
                 hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
             )

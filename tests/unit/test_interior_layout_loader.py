@@ -162,3 +162,24 @@ compartments:
         with pytest.raises(InteriorParameterError) as exc_info:
             _load_layout(str(path))
         assert "YAML" in exc_info.value.reason or "parse" in exc_info.value.reason.lower()
+
+
+# --- spec 023: DsSaloon bundled layout -------------------------------------
+
+
+def test_ds_saloon_loads_and_validates() -> None:
+    """The DS enclosed-saloon fixture loads by name and parses the helm type."""
+    source, raw = _load_layout("DsSaloon")
+    assert source == "DsSaloon"
+    spec = _validate_layout_schema(raw, source)
+    assert spec.layout_name == "DsSaloon"
+    types = {c.compartment_type for c in spec.compartments}
+    assert "helm" in types
+    assert "salon" in types and "galley" in types
+
+
+def test_ds_saloon_furnished() -> None:
+    from storebro.interior import _DS_LAYOUT_NAME, _FURNISHED_LAYOUTS  # type: ignore[attr-defined]
+
+    assert _DS_LAYOUT_NAME == "DsSaloon"
+    assert "DsSaloon" in _FURNISHED_LAYOUTS

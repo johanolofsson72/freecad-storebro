@@ -25,7 +25,7 @@ import importlib.resources
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -38,6 +38,7 @@ __all__ = [
     "FurnitureParameters",
     "GalleyParameters",
     "HeadParameters",
+    "HelmParameters",
     "Interior",
     "InteriorConstructionError",
     "InteriorParameterError",
@@ -144,10 +145,17 @@ class InteriorConstructionError(RuntimeError):
 # Constants
 # ---------------------------------------------------------------------------
 
-_COMPARTMENT_TYPES: frozenset[str] = frozenset({"forward_cabin", "galley", "head", "salon"})
+_COMPARTMENT_TYPES: frozenset[str] = frozenset(
+    {"forward_cabin", "galley", "head", "salon", "helm"}  # spec 023: helm (DS)
+)
 _CANONICAL_LAYOUT_NAMES: frozenset[str] = frozenset(
     {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}
 )
+# spec 023 — the DS enclosed-saloon layout is a bundled fixture loadable by name
+# (like the canonical five) but kept out of _CANONICAL_LAYOUT_NAMES so the
+# five-name contracts are unchanged.
+_DS_LAYOUT_NAME = "DsSaloon"
+_BUNDLED_LAYOUT_NAMES: frozenset[str] = _CANONICAL_LAYOUT_NAMES | {_DS_LAYOUT_NAME}
 _OVERLAP_THRESHOLD_M3 = 1.0e-6
 # spec 017: single metre→millimetre conversion authority for the geometry-
 # construction boundary. Layouts/fixtures are authored in metres; FreeCAD's
@@ -354,6 +362,30 @@ class SalonParameters:
 
 
 @dataclass(frozen=True)
+class HelmParameters:
+    """Helm-station console + seat parameters (spec 023, DS enclosed saloon).
+
+    Example:
+        >>> p = HelmParameters()
+        >>> p.console_height, p.seat_height
+        (1100.0, 550.0)
+    """
+
+    console_height: float = 1100.0
+    console_depth: float = 500.0
+    seat_height: float = 550.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("helm_console_height", self.console_height),
+            ("helm_console_depth", self.console_depth),
+            ("helm_seat_height", self.seat_height),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+
+
+@dataclass(frozen=True)
 class BulkheadParameters:
     """Bulkhead partition parameters (data-model §1.5).
 
@@ -387,6 +419,7 @@ class FurnitureParameters:
     head: HeadParameters = field(default_factory=HeadParameters)
     salon: SalonParameters = field(default_factory=SalonParameters)
     bulkhead: BulkheadParameters = field(default_factory=BulkheadParameters)
+    helm: HelmParameters = field(default_factory=HelmParameters)  # spec 023 (DS)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +476,7 @@ def _load_layout(source: str) -> tuple[str, dict[str, Any]]:
     Returns the resolved source identifier (canonical name or absolute path)
     plus the parsed dict.
     """
-    if source in _CANONICAL_LAYOUT_NAMES:
+    if source in _BUNDLED_LAYOUT_NAMES:
         try:
             fixture_path = importlib.resources.files("storebro.fixtures") / f"{source}.yaml"
             text = fixture_path.read_text(encoding="utf-8")
@@ -690,7 +723,9 @@ def _resolve_document(hull: Hull, document: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _validate_compartment_in_envelope(spec: CompartmentSpec, hull: Hull, source: str) -> None:
+def _validate_compartment_in_envelope(
+    spec: CompartmentSpec, hull: Hull, source: str, headroom_budget_m: float = 1.5
+) -> None:
     """Reject compartments that exceed the hull envelope (FR-010)."""
     hp = hull.parameters
     if spec.position.x < 0:
@@ -721,13 +756,14 @@ def _validate_compartment_in_envelope(spec: CompartmentSpec, hull: Hull, source:
             "position.z",
             f"floor is below keel (draft = {hp.draft} m)",
         )
-    # Headroom above sheer covers cabin trunk; 1.5 m fixed budget.
-    if spec.position.z + spec.dimensions.height > hp.sheer_height_fwd + 1.5:
+    # Headroom above sheer covers the cabin trunk (standard) or the taller DS
+    # enclosed deckhouse (ds). Budget defaults to 1.5 m so "standard" is unchanged.
+    if spec.position.z + spec.dimensions.height > hp.sheer_height_fwd + headroom_budget_m:
         raise InteriorParameterError(
             source,
             spec.name,
             "dimensions.height",
-            f"ceiling exceeds cabin trunk top ({hp.sheer_height_fwd} + 1.5 m headroom)",
+            f"ceiling exceeds headroom ({hp.sheer_height_fwd} + {headroom_budget_m} m)",
         )
 
 
@@ -864,7 +900,7 @@ def _build_compartment(
 # enabled Alt1/Alt2). Reuse _CANONICAL_LAYOUT_NAMES so the two cannot drift.
 # Custom (non-canonical) YAML layouts keep boxy placeholders. The per-type
 # dispatch skips absent compartment types (Alternativ5 has no galley).
-_FURNISHED_LAYOUTS: frozenset[str] = _CANONICAL_LAYOUT_NAMES
+_FURNISHED_LAYOUTS: frozenset[str] = _CANONICAL_LAYOUT_NAMES | {_DS_LAYOUT_NAME}
 
 
 def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[float, float, float]) -> Any:
@@ -1024,6 +1060,36 @@ def _build_salon_furniture(
     return [settee, table_top, pedestal]
 
 
+def _build_helm(
+    spec: CompartmentSpec, params: HelmParameters, label: str, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """helm → a forward console box + a helm seat box (DS enclosed saloon)."""
+    import FreeCAD
+
+    x0, z0 = spec.position.x * _M_TO_MM, spec.position.z * _M_TO_MM
+    width = spec.dimensions.width * _M_TO_MM
+    side_gap = 0.05 * _M_TO_MM
+    # Console: a forward dash spanning the width.
+    console = _box(
+        target_doc, added, f"{label}_HelmConsole",
+        FreeCAD.Vector(x0 + side_gap, -width / 2.0 + side_gap, z0),
+        (params.console_depth, width - 2 * side_gap, params.console_height),
+    )
+    # Helm seat: a seat box just aft of the console, offset to the helm side.
+    seat_l = 0.5 * _M_TO_MM
+    seat_w = 0.5 * _M_TO_MM
+    seat = _box(
+        target_doc, added, f"{label}_HelmSeat",
+        FreeCAD.Vector(
+            x0 + params.console_depth + side_gap + 0.1 * _M_TO_MM,
+            -width / 2.0 + side_gap,
+            z0,
+        ),
+        (seat_l, seat_w, params.seat_height),
+    )
+    return [console, seat]
+
+
 def _build_bulkhead(
     spec: CompartmentSpec, params: BulkheadParameters, label: str, target_doc: Any, added: list[Any]
 ) -> Any:
@@ -1061,6 +1127,8 @@ def _build_furnished_compartment(
         pieces = _build_head_fittings(spec, furniture.head, label, target_doc, local_added)
     elif spec.compartment_type == "salon":
         pieces = _build_salon_furniture(spec, furniture.salon, label, target_doc, local_added)
+    elif spec.compartment_type == "helm":
+        pieces = _build_helm(spec, furniture.helm, label, target_doc, local_added)
     else:  # pragma: no cover - guarded by _COMPARTMENT_TYPES at parse time
         pieces = []
     pieces.append(_build_bulkhead(spec, furniture.bulkhead, label, target_doc, local_added))
@@ -1101,6 +1169,7 @@ def build_interior(
     document: Any = None,
     name: str | None = None,
     apply_render_attributes: bool = True,
+    superstructure_variant: Literal["standard", "ds"] = "standard",
 ) -> Interior:
     """Build the parametric interior compartments on a hull and deck.
 
@@ -1137,6 +1206,14 @@ def build_interior(
     """
     _ensure_freecad_supported()
 
+    # spec 023 — the DS variant builds the bundled enclosed-saloon layout with a
+    # taller standing-headroom budget; "standard" is unchanged (1.5 m).
+    if superstructure_variant == "ds":
+        layout = _DS_LAYOUT_NAME
+        headroom_budget_m = 2.5
+    else:
+        headroom_budget_m = 1.5
+
     resolved_source, raw_layout = _load_layout(layout)
     layout_spec = _validate_layout_schema(raw_layout, resolved_source)
 
@@ -1144,7 +1221,7 @@ def build_interior(
     _validate_deck(deck, hull)
 
     for spec in layout_spec.compartments:
-        _validate_compartment_in_envelope(spec, hull, resolved_source)
+        _validate_compartment_in_envelope(spec, hull, resolved_source, headroom_budget_m)
     _validate_no_overlaps(layout_spec.compartments, resolved_source)
 
     # spec 012 — resolve furniture; gate detailed furniture to Alt1/Alt2.

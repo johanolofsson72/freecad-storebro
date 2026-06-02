@@ -4,6 +4,38 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-03
+
+Spec 023 — DS deckhouse detailing. The enclosed deck-saloon variant gets the
+parts spec 016 left out. The raked front screen now has a framed window recess
+with glass, cut on a datum tilted to the rake angle. Each side window gets a
+vertical mullion bar. One side wall gets a tall helm-door recess, dropped into
+the widest gap between the windows so it never collides with one. The deckhouse
+stays a filled solid with blind recesses — you read closed doors and windows,
+not holes through a block — so it stays watertight.
+
+The DS variant also gets its own interior. `build_interior(...,
+superstructure_variant="ds")` builds a bundled enclosed-saloon layout — forward
+cabin, head, galley, a helm station with a console and seat, and an aft saloon —
+furnished with the standing headroom the deckhouse allows. `"standard"` is
+unchanged.
+
+### Added
+
+- DS deckhouse front-window recess + glass, side-window mullions, and a
+  helm-door recess (`DsWindowParameters.front_window`/`front_length`/
+  `front_height`/`mullions_per_window`/`mullion_width`/`helm_door`/
+  `helm_door_length`/`helm_door_height`/`helm_door_side`).
+- `build_interior(..., superstructure_variant="ds")` — the DS enclosed-saloon
+  layout (`DsSaloon`) with a new `helm` compartment type, `HelmParameters`, and
+  the taller deckhouse headroom budget.
+
+### Changed
+
+- The default DS deckhouse now carries the detailing; existing
+  `build_deck(superstructure_variant="ds")` callers get it automatically. No
+  public type, field, or function was removed.
+
 ## [1.8.0] - 2026-06-03
 
 Spec 022 — deck-hardware detailing. The five spec 010 placeholders stop looking

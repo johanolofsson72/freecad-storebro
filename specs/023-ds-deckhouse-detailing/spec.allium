@@ -1,0 +1,120 @@
+-- allium: 3
+--
+-- Spec 023 — ds-deckhouse-detailing — ELICITED from spec.md
+--
+-- Finish the spec 016 DS deckhouse: a blind front-window recess on the raked
+-- screen (rotated datum), raised mullion strips on the side windows, a blind
+-- helm-door recess, and a DS interior refit (headroom + helm console). All
+-- cuts/bosses act on the deckhouse body only (FR-006 NOBOOL); the deckhouse
+-- stays a single valid solid (FR-005). The deckhouse is a FILLED solid, so
+-- every opening is a blind recess, never a through-cut.
+
+config {
+    manifold_solids_count: Integer = 1
+    default_front_window: Boolean = true
+    default_mullions_per_window: Integer = 1
+    default_helm_door: Boolean = true
+}
+
+entity Deckhouse {
+    solids_count: Integer
+    is_valid: Boolean
+    has_front_window: Boolean
+    front_window_skipped: Boolean   -- manifold-or-skip gate tripped
+    mullion_count: Integer
+    has_helm_door: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    -- FR-001: the front window is present unless it was disabled or the
+    -- rotated-datum cut failed the manifold gate (then deterministically skipped).
+    invariant FrontWindowOrSkip {
+        this.has_front_window = true or this.front_window_skipped = true
+        or this.front_window_disabled = true
+    }
+    front_window_disabled: Boolean
+}
+
+-- The translucent pane on the raked front face (spec 019 glass discipline).
+entity FrontGlassPane {
+    solids_count: Integer
+    is_valid: Boolean
+    render_role: glass
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant GlassRole { this.render_role = glass }
+}
+
+-- The DS interior refit: a full bespoke enclosed-saloon layout built only in
+-- "ds" mode (a bundled DsSaloon layout furnished by the spec 012/013 builders,
+-- including a new `helm` console+seat furniture type).
+entity DsInterior {
+    variant: standard | ds
+    compartment_count: Integer
+    has_helm_furniture: Boolean
+    all_furniture_valid: Boolean
+    uses_deckhouse_headroom: Boolean
+
+    -- A DS interior exists only in the ds variant; standard is unchanged.
+    invariant DsOnly { this.variant = ds }
+    invariant Furnished { this.compartment_count > 0 }
+    invariant HelmPresent { this.has_helm_furniture = true }
+    invariant FurnitureManifold { this.all_furniture_valid = true }
+}
+
+rule BuildFrontWindow {
+    when: BuildDeckhouse(front_window_enabled)
+    ensures:
+        if front_window_enabled and RotatedCutValid():
+            FrontGlassPane.created(solids_count: 1, is_valid: true, render_role: glass)
+        -- else the front recess is deterministically skipped; the deckhouse
+        -- still ensures SingleSolid + Valid.
+}
+
+rule BuildMullions {
+    when: BuildSideWindows(mullions_per_window)
+    requires: mullions_per_window >= 0
+    ensures:
+        -- Raised bosses fuse into the deckhouse; it stays one solid.
+        DeckhouseStaysSingleSolid()
+}
+
+rule BuildHelmDoor {
+    when: BuildDeckhouse(helm_door_enabled)
+    ensures:
+        if helm_door_enabled:
+            -- A blind door-shaped pocket; never a through-cut.
+            DeckhouseStaysSingleSolid()
+}
+
+rule BuildDsInterior {
+    when: BuildInterior(variant)
+    ensures:
+        if variant = ds:
+            -- Full DS enclosed-saloon layout, furnished incl. a helm console+seat.
+            DsInterior.created(variant: ds, has_helm_furniture: true, all_furniture_valid: true, uses_deckhouse_headroom: true)
+        if variant = standard:
+            -- byte-identical to the pre-spec-023 interior.
+            InteriorUnchanged()
+}
+
+rule RollbackOnFailure {
+    when: FreecadFailure(stage)
+    requires: stage = deckhouse_build
+    ensures:
+        ConstructionErrorRaised()
+        DocumentRestoredToPreCallState()
+}
+
+-- FR-005: every deckhouse stays a single manifold solid.
+invariant DeckhouseManifold {
+    for d in Deckhouse: d.solids_count = 1 and d.is_valid = true
+}
+
+actor Builder { identified_by: Deckhouse }
+
+-- Through-openings (real cut-through helm door / sliding window) stay out — the
+-- deckhouse is a filled solid and a tunnel cut reads wrong + risks non-manifold.
+-- The user reviewed this and KEPT the blind recesses (2026-06-03).
+deferred Deckhouse.through_cut_openings
