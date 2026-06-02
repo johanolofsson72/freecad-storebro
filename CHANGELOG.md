@@ -4,6 +4,50 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-02
+
+Spec 015 — render attributes. The model now comes coloured. Every body the
+library builds gets a deterministic, role-keyed colour and a named material, so
+a `storebro build` opens in FreeCAD looking like a Storebro: gelcoat-white hull
+and superstructure, teak-brown rubrail and interior joinery, chromed railings
+and deck hardware, translucent windshield glass, bronze propeller and rudder, a
+dark engine. A new `render` module holds a central palette, and each `build_*`
+applies it to the bodies it creates. Colours are stored as App data properties
+that persist on a headless build (the GUI's own colours need a GUI session).
+Geometry is never touched, and the appearance-free STEP/STL/BREP exports stay
+byte-identical. The change is additive, so every earlier call site keeps
+working; the minor version goes to 1.2.0.
+
+### Added
+
+- `render` module: `RenderAttribute`, the `PALETTE` mapping of role to
+  colour + material, `role_for_label`, and
+  `apply_render_attributes(objects, *, enabled=True)`.
+- `apply_render_attributes: bool = True` keyword on `build_hull`, `build_deck`,
+  `build_interior`, and `build_propulsion`, which colours the bodies each one
+  builds.
+- CLI `build` flag `--no-colors` for a neutral model (FreeCAD default
+  appearance).
+
+### Changed
+
+- `storebro build` colours the model by default; pass `--no-colors` to opt out.
+- Version bumped 1.1.0 to 1.2.0 in `pyproject.toml` and `storebro.__version__`.
+
+### Notes
+
+- Colours are stored as `RenderColor`, `RenderMaterial`, and
+  `RenderMaterialName` data properties on each body (verified on FreeCAD 1.1.1).
+  The GUI renders from view-provider colours in `GuiDocument.xml`, which a
+  headless build cannot write, so GUI-visible colour shows up when the model is
+  built or opened in a GUI session. The data properties are the durable carrier.
+- Portholes and cabin-trunk windows are recesses in opaque parent bodies and
+  take the parent colour; only the windshield has a separate translucent glass
+  body. Separate glass inserts for those are deferred.
+- Geometry tier verified on FreeCAD 1.1.1 (969 passed, 1 skipped, 2 xfailed).
+  The GUI eyeball of the signoff `.FCStd` is still the maintainer's pre-tag step
+  (constitution V).
+
 ## [1.1.0] - 2026-06-01
 
 Spec 014 — propulsion. The boat now has an engine room and running gear. A new

@@ -84,10 +84,17 @@ from storebro.propulsion import (
     ShaftParameters,
     build_propulsion,
 )
+from storebro.render import (
+    PALETTE,
+    RenderAttribute,
+    apply_render_attributes,
+    role_for_label,
+)
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
+    "PALETTE",
     "AnchorLockerParameters",
     "BerthParameters",
     "BowPulpitParameters",
@@ -132,6 +139,7 @@ __all__ = [
     "PropulsionParameterError",
     "PropulsionParameters",
     "RailingParameters",
+    "RenderAttribute",
     "RubrailParameters",
     "Rudder",
     "RudderParameters",
@@ -141,6 +149,7 @@ __all__ = [
     "WindshieldGlazingParameters",
     "WindshieldParameters",
     "__version__",
+    "apply_render_attributes",
     "build_deck",
     "build_hull",
     "build_interior",
@@ -150,4 +159,5 @@ __all__ = [
     "export_step",
     "export_stl",
     "main",
+    "role_for_label",
 ]

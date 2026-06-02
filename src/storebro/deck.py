@@ -2882,6 +2882,7 @@ def build_deck(
     parameters_glazing: DeckGlazingParameters | None = None,
     document: Any = None,
     name: str = "Deck",
+    apply_render_attributes: bool = True,
 ) -> Deck:
     """Build the parametric Storebro deck (superstructure + hardware) on a hull.
 
@@ -3022,6 +3023,27 @@ def build_deck(
             hull=hull,
             underlying=exc,
         ) from exc
+
+    # spec 015 — cosmetic render attributes on every top-level deck body
+    # (superstructure white, rubrail teak, hardware chrome, glass translucent).
+    from storebro.render import apply_render_attributes as _apply_render_attributes
+
+    _render_targets: list[Any] = [
+        deck_plate.body,
+        cabin_trunk.body,
+        windshield.body,
+        hardtop.body,
+        hardtop_pillars.body,
+        railings.body,
+        rubrail.body,
+        bow_pulpit.body,
+        lifelines.body,
+        anchor_locker.body,
+        cleats.body,
+    ]
+    if windshield.glass_pane is not None:
+        _render_targets.append(windshield.glass_pane.body)
+    _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
     return Deck(

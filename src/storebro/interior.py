@@ -1082,6 +1082,7 @@ def build_interior(
     parameters_furniture: FurnitureParameters | None = None,
     document: Any = None,
     name: str | None = None,
+    apply_render_attributes: bool = True,
 ) -> Interior:
     """Build the parametric interior compartments on a hull and deck.
 
@@ -1168,6 +1169,14 @@ def build_interior(
             deck=deck,
             underlying=exc,
         ) from exc
+
+    # spec 015 — cosmetic render attributes: compartment compounds read as teak
+    # joinery (trim). Geometry committed → outside the rollback try-block.
+    from storebro.render import apply_render_attributes as _apply_render_attributes
+
+    _apply_render_attributes(
+        [c.body for c in compartments], enabled=apply_render_attributes
+    )
 
     duration = time.perf_counter() - started
     return Interior(

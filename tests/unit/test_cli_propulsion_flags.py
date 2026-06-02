@@ -53,11 +53,17 @@ def _install_fake_build_chain(
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
 
     hull = types.SimpleNamespace(document="doc", body="body")
-    monkeypatch.setattr(cli, "build_hull", lambda document=None: hull)
-    monkeypatch.setattr(cli, "build_deck", lambda h: types.SimpleNamespace())
-    monkeypatch.setattr(cli, "build_interior", lambda h, d, layout=None: None)
+    monkeypatch.setattr(cli, "build_hull", lambda document=None, apply_render_attributes=True: hull)
+    monkeypatch.setattr(
+        cli, "build_deck", lambda h, apply_render_attributes=True: types.SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        cli, "build_interior", lambda h, d, layout=None, apply_render_attributes=True: None
+    )
 
-    def _fake_prop(h: Any, d: Any, parameters: Any = None) -> Any:
+    def _fake_prop(
+        h: Any, d: Any, parameters: Any = None, apply_render_attributes: bool = True
+    ) -> Any:
         calls["propulsion"] = parameters
         return types.SimpleNamespace()
 

@@ -1156,6 +1156,7 @@ def build_hull(
     parameters_glazing: HullGlazingParameters | None = None,
     document: Any = None,
     name: str = "Hull",
+    apply_render_attributes: bool = True,
 ) -> Hull:
     """Build a parametric Storebro hull Body in a FreeCAD document.
 
@@ -1269,6 +1270,12 @@ def build_hull(
             parameters=resolved_params,
             underlying=underlying,
         ) from underlying
+
+    # spec 015 — cosmetic render attributes (gelcoat-white hull). On by default;
+    # geometry is already committed, so this is outside the rollback try-block.
+    from storebro.render import apply_render_attributes as _apply_render_attributes
+
+    _apply_render_attributes([body], enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
     return Hull(

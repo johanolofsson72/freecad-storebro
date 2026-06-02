@@ -161,6 +161,11 @@ def _build_top_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the propulsion step (hull + deck + interior only).",
     )
+    build_p.add_argument(
+        "--no-colors",
+        action="store_true",
+        help="Build a neutral model: skip cosmetic colors + materials (FreeCAD default appearance).",
+    )
 
     subparsers.add_parser(
         "list-layouts",
@@ -241,10 +246,13 @@ def _run_build(args: argparse.Namespace) -> int:
     # document and ends up emitting both hulls in the same FCStd.
     import FreeCAD
 
+    # spec 015 — cosmetic colors on by default; --no-colors builds a neutral model.
+    colors = not args.no_colors
+
     fresh_doc = FreeCAD.newDocument("storebro_build")
-    hull = build_hull(document=fresh_doc)
-    deck = build_deck(hull)
-    build_interior(hull, deck, layout=args.layout)
+    hull = build_hull(document=fresh_doc, apply_render_attributes=colors)
+    deck = build_deck(hull, apply_render_attributes=colors)
+    build_interior(hull, deck, layout=args.layout, apply_render_attributes=colors)
     if not args.no_propulsion:
         # A single-screw layout is centred (offset 0); twin uses the default offset.
         propulsion_params = (
@@ -252,7 +260,7 @@ def _run_build(args: argparse.Namespace) -> int:
             if args.engine_count == 1
             else PropulsionParameters(engine_count=2)
         )
-        build_propulsion(hull, deck, parameters=propulsion_params)
+        build_propulsion(hull, deck, parameters=propulsion_params, apply_render_attributes=colors)
 
     artifact: ExportArtifact
     fmt = args.format

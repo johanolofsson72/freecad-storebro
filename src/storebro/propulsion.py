@@ -877,6 +877,7 @@ def build_propulsion(
     *,
     document: Any | None = None,
     name: str = "Propulsion",
+    apply_render_attributes: bool = True,
 ) -> Propulsion:
     """Build a parametric inboard propulsion installation seated in the hull.
 
@@ -987,6 +988,19 @@ def build_propulsion(
             parameters=resolved,
             underlying=underlying,
         ) from underlying
+
+    # spec 015 — cosmetic render attributes: dark engine + bed, steel shaft,
+    # bronze propeller + rudder. Geometry committed → outside the rollback block.
+    from storebro.render import apply_render_attributes as _apply_render_attributes
+
+    _render_targets: list[Any] = [
+        *(b.body for b in beds),
+        *(e.body for e in engines),
+        *(s.body for s in shafts),
+        *(p.body for p in propellers),
+        *(r.body for r in rudders),
+    ]
+    _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
     return Propulsion(

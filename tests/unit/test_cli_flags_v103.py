@@ -31,6 +31,8 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         # and exposes the one meaningful layout choice + an opt-out.
         "--engine-count",
         "--no-propulsion",
+        # spec 015 (render-attributes) FR-008: global opt-out of cosmetic colours.
+        "--no-colors",
     }
 )
 
