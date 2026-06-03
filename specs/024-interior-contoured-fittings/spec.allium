@@ -1,0 +1,107 @@
+-- allium: 3
+--
+-- Spec 024 — interior-contoured-fittings — ELICITED from spec.md
+--
+-- Cosmetic refinement of the specs 012/013 furniture: rounded cushions +
+-- berth upholstery seams, contoured toilet + faucet, galley appliance fascia,
+-- curved bulkheads. All via Part B-rep ops (makeFillet/fuse/cut) on the
+-- existing Part::Feature furniture (FR-006). Every piece stays a single valid
+-- solid (FR-001..005) or falls back deterministically to its box (FR-007).
+-- Contour ops are byte-reproducible (FR-011, spiked).
+
+config {
+    manifold_solids_count: Integer = 1
+    default_contoured: Boolean = true
+    default_cushion_segments: Integer = 2
+}
+
+entity FurniturePiece {
+    is_valid: Boolean
+    solids_count: Integer
+    contoured: Boolean
+    fell_back_to_box: Boolean
+
+    invariant Valid { this.is_valid = true }
+    -- FR-007: contoured single solid, or a deterministic box fallback.
+    invariant ContouredOrFallback {
+        (this.contoured = true and this.solids_count = 1)
+        or this.fell_back_to_box = true
+        or this.contoured = false
+    }
+}
+
+entity BerthCushion {
+    segment_count: Integer
+    rounded: Boolean
+    has_buttons: Boolean      -- tufting dimples (cut spheres)
+    has_piping: Boolean       -- raised welt around the top perimeter
+    is_valid: Boolean
+    solids_count: Integer
+
+    invariant Segmented { this.segment_count >= 1 }
+    invariant Valid { this.is_valid = true }
+    invariant SingleSolid { this.solids_count = 1 }
+}
+
+entity Toilet {
+    solids_count: Integer
+    is_valid: Boolean
+    has_bowl: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+    invariant Bowl { this.has_bowl = true }
+}
+
+entity Bulkhead {
+    solids_count: Integer
+    is_valid: Boolean
+    corners_rounded: Boolean
+    has_doorway: Boolean
+
+    invariant SingleSolid { this.solids_count = 1 }
+    invariant Valid { this.is_valid = true }
+}
+
+rule BuildContouredCushion {
+    when: BuildBerth(segments, contoured)
+    requires: segments >= 1
+    ensures:
+        if contoured:
+            -- rounded + tufting buttons + piping welt, one manifold solid.
+            BerthCushion.created(segment_count: segments, rounded: true, has_buttons: true, has_piping: true, is_valid: true, solids_count: 1)
+}
+
+rule BuildContouredToilet {
+    when: BuildHead(contoured)
+    ensures:
+        if contoured and FilletAndFuseValid():
+            Toilet.created(solids_count: 1, is_valid: true, has_bowl: true)
+        if contoured and not FilletAndFuseValid():
+            -- deterministic fallback to the spec 012 toilet box.
+            FurniturePiece.created(is_valid: true, solids_count: 1, contoured: false, fell_back_to_box: true)
+}
+
+rule BuildContouredBulkhead {
+    when: BuildBulkhead(contoured, doorway_fits)
+    ensures:
+        if contoured:
+            Bulkhead.created(solids_count: 1, is_valid: true, corners_rounded: true, has_doorway: doorway_fits)
+}
+
+rule FallbackOnContourFailure {
+    when: ContourFailure(piece)
+    ensures:
+        -- revert to the un-contoured spec 012/013 box; still valid.
+        FurniturePiece.created(is_valid: true, solids_count: 1, contoured: false, fell_back_to_box: true)
+}
+
+-- FR-001..005: every produced furniture piece is a valid solid.
+invariant AllPiecesValid {
+    for f in FurniturePiece: f.is_valid = true
+}
+
+actor Builder { identified_by: FurniturePiece }
+
+-- Fabric micro-detail (tufting buttons, piping welt, fold creases) was promoted
+-- from deferred to in-scope by the user (2026-06-03). Nothing remains deferred.

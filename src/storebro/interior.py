@@ -265,11 +265,25 @@ class BerthParameters:
     cushion_thickness: float = 100.0
     cushion_count: int = 1
     wall_inset: float = 50.0
+    # spec 024 — contoured + fabric-detailed cushions.
+    contoured: bool = True
+    cushion_segments: int = 2
+    seam_gap: float = 15.0
+    cushion_fillet: float = 25.0
+    buttons_per_row: int = 4
+    button_rows: int = 2
+    button_radius: float = 35.0
+    piping: bool = True
+    piping_radius: float = 12.0
+    fold_creases: int = 2
 
     def __post_init__(self) -> None:
         for name, value in (
             ("berth_base_height", self.base_height),
             ("berth_cushion_thickness", self.cushion_thickness),
+            ("berth_cushion_fillet", self.cushion_fillet),
+            ("berth_button_radius", self.button_radius),
+            ("berth_piping_radius", self.piping_radius),
         ):
             if value <= 0:
                 raise _furniture_error(name, "must be > 0")
@@ -277,6 +291,16 @@ class BerthParameters:
             raise _furniture_error("berth_cushion_count", "must be >= 0")
         if self.wall_inset < 0:
             raise _furniture_error("berth_wall_inset", "must be >= 0")
+        if self.cushion_segments < 1:
+            raise _furniture_error("berth_cushion_segments", "must be >= 1")
+        for name, value in (
+            ("berth_seam_gap", self.seam_gap),
+            ("berth_buttons_per_row", float(self.buttons_per_row)),
+            ("berth_button_rows", float(self.button_rows)),
+            ("berth_fold_creases", float(self.fold_creases)),
+        ):
+            if value < 0:
+                raise _furniture_error(name, "must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -297,6 +321,11 @@ class GalleyParameters:
     sink_recess_depth: float = 30.0
     stove_recess_depth: float = 20.0
     cutouts_enabled: bool = True
+    # spec 024 — rounded worktop edges + a forward appliance fascia.
+    contoured: bool = True
+    edge_fillet: float = 12.0
+    fascia: bool = True
+    fascia_thickness: float = 18.0
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -304,6 +333,8 @@ class GalleyParameters:
             ("galley_counter_thickness", self.counter_thickness),
             ("galley_sink_recess_depth", self.sink_recess_depth),
             ("galley_stove_recess_depth", self.stove_recess_depth),
+            ("galley_edge_fillet", self.edge_fillet),
+            ("galley_fascia_thickness", self.fascia_thickness),
         ):
             if value <= 0:
                 raise _furniture_error(name, "must be > 0")
@@ -329,11 +360,20 @@ class HeadParameters:
 
     toilet_height: float = 400.0
     sink_height: float = 800.0
+    # spec 024 — contoured toilet (rounded pedestal + bowl) + faucet.
+    contoured: bool = True
+    toilet_fillet: float = 30.0
+    bowl_radius: float = 170.0
+    faucet: bool = True
+    faucet_height: float = 200.0
 
     def __post_init__(self) -> None:
         for name, value in (
             ("head_toilet_height", self.toilet_height),
             ("head_sink_height", self.sink_height),
+            ("head_toilet_fillet", self.toilet_fillet),
+            ("head_bowl_radius", self.bowl_radius),
+            ("head_faucet_height", self.faucet_height),
         ):
             if value <= 0:
                 raise _furniture_error(name, "must be > 0")
@@ -351,14 +391,33 @@ class SalonParameters:
 
     seat_height: float = 400.0
     table_height: float = 650.0
+    # spec 024 — contoured + fabric-detailed settee.
+    contoured: bool = True
+    seat_fillet: float = 25.0
+    buttons_per_row: int = 6
+    button_rows: int = 1
+    button_radius: float = 35.0
+    piping: bool = True
+    piping_radius: float = 12.0
+    fold_creases: int = 2
 
     def __post_init__(self) -> None:
         for name, value in (
             ("salon_seat_height", self.seat_height),
             ("salon_table_height", self.table_height),
+            ("salon_seat_fillet", self.seat_fillet),
+            ("salon_button_radius", self.button_radius),
+            ("salon_piping_radius", self.piping_radius),
         ):
             if value <= 0:
                 raise _furniture_error(name, "must be > 0")
+        for name, value in (
+            ("salon_buttons_per_row", float(self.buttons_per_row)),
+            ("salon_button_rows", float(self.button_rows)),
+            ("salon_fold_creases", float(self.fold_creases)),
+        ):
+            if value < 0:
+                raise _furniture_error(name, "must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -396,10 +455,22 @@ class BulkheadParameters:
     """
 
     thickness: float = 25.0
+    # spec 024 — rounded corners + a rounded-top doorway.
+    contoured: bool = True
+    corner_fillet: float = 40.0
+    doorway: bool = True
+    doorway_width: float = 600.0
+    doorway_height: float = 1500.0
 
     def __post_init__(self) -> None:
-        if self.thickness <= 0:
-            raise _furniture_error("bulkhead_thickness", "must be > 0")
+        for name, value in (
+            ("bulkhead_thickness", self.thickness),
+            ("bulkhead_corner_fillet", self.corner_fillet),
+            ("bulkhead_doorway_width", self.doorway_width),
+            ("bulkhead_doorway_height", self.doorway_height),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
 
 
 @dataclass(frozen=True)
@@ -916,6 +987,128 @@ def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[
     return obj
 
 
+# ---------------------------------------------------------------------------
+# spec 024 — contour helpers (Part B-rep on Part::Feature furniture).
+#
+# A spike proved every op manifold AND byte-reproducible (filleted/cut/fused
+# volumes are identical across builds — no spec 022 arc-loft trouble), so these
+# are safe for constitution II. Each contoured piece carries a manifold-or-box
+# fallback gate (FR-007).
+# ---------------------------------------------------------------------------
+
+
+def _box_shape(origin: Any, size: tuple[float, float, float]) -> Any:
+    """A translated Part box shape (no document object)."""
+    import Part
+
+    dx, dy, dz = size
+    s = Part.makeBox(dx, dy, dz)
+    s.translate(origin)
+    return s
+
+
+def _rounded_box_shape(
+    origin: Any, size: tuple[float, float, float], radius: float, *, vertical_only: bool = False
+) -> Any:
+    """A box with filleted edges (clamped radius; falls back to the plain box).
+
+    ``vertical_only`` rounds just the four Z-parallel edges (e.g. bulkhead
+    corners); otherwise all edges are rounded (a soft cushion/pad).
+    """
+    s = _box_shape(origin, size)
+    dx, dy, dz = size
+    rr = min(radius, dx / 2.1, dy / 2.1, dz / 2.1)
+    if rr <= 0:
+        return s
+    if vertical_only:
+        edges = [
+            e
+            for e in s.Edges
+            if len(e.Vertexes) == 2 and abs(e.Vertexes[0].Z - e.Vertexes[1].Z) > 1e-6
+        ]
+        rr = min(radius, dx / 2.1, dy / 2.1)
+    else:
+        edges = list(s.Edges)
+    try:
+        filleted = s.makeFillet(rr, edges)
+        if len(filleted.Solids) == 1 and filleted.isValid():
+            return filleted
+    except Exception:
+        pass
+    return s
+
+
+def _cushion_shape(origin: Any, size: tuple[float, float, float], fab: Any) -> Any:
+    """A fabric-detailed cushion: rounded box + tufting buttons (cut spheres) +
+    piping welt (fused frame) + fold creases (cut grooves).
+
+    ``fab`` supplies ``cushion_fillet``/``button_*``/``piping*``/``fold_creases``
+    (the berth or salon params). Returns a single-solid shape; on any failure or
+    a non-single-solid result, returns the plain box (FR-007, deterministic).
+    """
+    import FreeCAD
+    import Part
+
+    dx, dy, dz = size
+    ox, oy, oz = origin.x, origin.y, origin.z
+    fillet = float(getattr(fab, "cushion_fillet", 0.0) or getattr(fab, "seat_fillet", 20.0))
+    base = _rounded_box_shape(origin, size, fillet)
+    try:
+        shape = base
+        top_z = oz + dz
+        # Tufting buttons — a grid of shallow cut-sphere dimples on the top face.
+        cols = max(0, int(getattr(fab, "buttons_per_row", 0)))
+        rows = max(0, int(getattr(fab, "button_rows", 0)))
+        br = float(getattr(fab, "button_radius", 0.0))
+        depth = min(br * 0.55, dz * 0.4)
+        for i in range(cols):
+            for j in range(rows):
+                bx = ox + dx * (i + 0.5) / cols
+                by = oy + dy * (j + 0.5) / rows
+                sph = Part.makeSphere(br)
+                sph.translate(FreeCAD.Vector(bx, by, top_z + br - depth))
+                shape = shape.cut(sph)
+        # Piping welt — a thin raised rounded frame around the top perimeter.
+        if getattr(fab, "piping", False):
+            pr = float(getattr(fab, "piping_radius", 0.0))
+            inset = pr * 2.0
+            if dx > 4 * inset and dy > 4 * inset:
+                outer = Part.makeBox(dx - 2 * inset + 2 * pr, dy - 2 * inset + 2 * pr, pr)
+                inner = Part.makeBox(dx - 2 * inset, dy - 2 * inset, pr * 2)
+                outer.translate(FreeCAD.Vector(ox + inset - pr, oy + inset - pr, top_z - pr * 0.3))
+                inner.translate(FreeCAD.Vector(ox + inset, oy + inset, top_z - pr))
+                shape = shape.fuse(outer.cut(inner))
+        # Fold creases — shallow grooves cut across the top.
+        folds = max(0, int(getattr(fab, "fold_creases", 0)))
+        for k in range(folds):
+            gx = ox + dx * (k + 1) / (folds + 1)
+            groove = Part.makeBox(8.0, dy * 0.7, 10.0)
+            groove.translate(FreeCAD.Vector(gx - 4.0, oy + dy * 0.15, top_z - 6.0))
+            shape = shape.cut(groove)
+        if len(shape.Solids) == 1 and shape.isValid():
+            return shape
+    except Exception:
+        pass
+    return _box_shape(origin, size)
+
+
+def _finalize_piece(
+    target_doc: Any,
+    added: list[Any],
+    name: str,
+    shape: Any,
+    fallback: tuple[Any, tuple[float, float, float]],
+) -> Any:
+    """Wrap a contour shape as a Part::Feature, falling back to a box if the
+    shape is not a single valid solid (FR-007, manifold-or-box gate)."""
+    if shape is None or len(shape.Solids) != 1 or not shape.isValid():
+        shape = _box_shape(fallback[0], fallback[1])
+    obj = target_doc.addObject("Part::Feature", name)
+    obj.Shape = shape
+    added.append(obj)
+    return obj
+
+
 def _validate_furniture_envelope(
     spec: CompartmentSpec, furniture: FurnitureParameters, source: str
 ) -> None:
@@ -936,7 +1129,12 @@ def _validate_furniture_envelope(
 def _build_berth(
     spec: CompartmentSpec, params: BerthParameters, label: str, target_doc: Any, added: list[Any]
 ) -> list[Any]:
-    """forward_cabin → a berth base box + cushion box(es) on top."""
+    """forward_cabin → a berth base + cushion(s).
+
+    spec 024: when ``contoured`` the cushion slab is split into
+    ``cushion_segments`` fabric-detailed sub-cushions (rounded + tufting buttons
+    + piping + fold creases) separated by seam gaps; else the spec 012 boxes.
+    """
     import FreeCAD
 
     inset = params.wall_inset
@@ -952,20 +1150,45 @@ def _build_berth(
             FreeCAD.Vector(x0, -width / 2.0, z0), (length, width, base_h),
         )
     ]
-    for i in range(params.cushion_count):
-        bodies.append(
-            _box(
-                target_doc, added, f"{label}_Cushion_{i + 1}",
-                FreeCAD.Vector(x0, -width / 2.0, z0 + base_h), (length, width, cush_t),
+    if not params.contoured:
+        for i in range(params.cushion_count):
+            bodies.append(
+                _box(
+                    target_doc, added, f"{label}_Cushion_{i + 1}",
+                    FreeCAD.Vector(x0, -width / 2.0, z0 + base_h), (length, width, cush_t),
+                )
             )
-        )
+        return bodies
+    # Contoured: per cushion layer, split into segmented sub-cushions.
+    seg = max(1, params.cushion_segments)
+    gap = params.seam_gap
+    seg_len = (length - (seg - 1) * gap) / seg
+    seq = 0
+    for _layer in range(params.cushion_count):
+        for s in range(seg):
+            seq += 1
+            sx = x0 + s * (seg_len + gap)
+            origin = FreeCAD.Vector(sx, -width / 2.0, z0 + base_h)
+            shape = _cushion_shape(origin, (seg_len, width, cush_t), params)
+            bodies.append(
+                _finalize_piece(
+                    target_doc, added, f"{label}_Cushion_{seq}", shape,
+                    (origin, (seg_len, width, cush_t)),
+                )
+            )
     return bodies
 
 
 def _build_galley_counter(
     spec: CompartmentSpec, params: GalleyParameters, label: str, target_doc: Any, added: list[Any]
 ) -> list[Any]:
-    """galley → a worktop box with blind sink + stove recesses (Part.Cut)."""
+    """galley → a worktop box with blind sink + stove recesses (Part.Cut).
+
+    spec 024: when ``contoured`` the worktop outer corners are rounded and a
+    forward fascia panel is fused under the front edge — kept a single valid
+    solid (the spec 012 manifold guard); on failure it falls back to the plain
+    worktop.
+    """
     import FreeCAD
     import Part
 
@@ -976,20 +1199,43 @@ def _build_galley_counter(
     width = spec.dimensions.width * _M_TO_MM - 2 * inset
     x0 = spec.position.x * _M_TO_MM + inset
     z0 = spec.position.z * _M_TO_MM + counter_h - thick
-    counter = Part.makeBox(length, width, thick)
-    counter.translate(FreeCAD.Vector(x0, -width / 2.0, z0))
 
-    if params.cutouts_enabled:
-        sink_d = params.sink_recess_depth
-        stove_d = params.stove_recess_depth
-        cut_l, cut_w = length * 0.25, width * 0.4
-        top_z = z0 + thick
-        # Sink recess in the forward quarter; stove recess in the aft quarter.
-        sink = Part.makeBox(cut_l, cut_w, sink_d)
-        sink.translate(FreeCAD.Vector(x0 + length * 0.1, -cut_w / 2.0, top_z - sink_d))
-        stove = Part.makeBox(cut_l, cut_w, stove_d)
-        stove.translate(FreeCAD.Vector(x0 + length * 0.6, -cut_w / 2.0, top_z - stove_d))
-        counter = counter.cut(sink).cut(stove)
+    def _make_counter(*, contour: bool) -> Any:
+        c = Part.makeBox(length, width, thick)
+        c.translate(FreeCAD.Vector(x0, -width / 2.0, z0))
+        if contour:
+            # Round the four outer vertical corner edges before cutting recesses.
+            rr = min(params.edge_fillet, width / 2.1, length / 2.1)
+            corners = [
+                e
+                for e in c.Edges
+                if len(e.Vertexes) == 2
+                and abs(e.Vertexes[0].Z - e.Vertexes[1].Z) > 1e-6
+            ]
+            with contextlib.suppress(Exception):
+                c = c.makeFillet(rr, corners)
+        if params.cutouts_enabled:
+            sink_d = params.sink_recess_depth
+            stove_d = params.stove_recess_depth
+            cut_l, cut_w = length * 0.25, width * 0.4
+            top_z = z0 + thick
+            sink = Part.makeBox(cut_l, cut_w, sink_d)
+            sink.translate(FreeCAD.Vector(x0 + length * 0.1, -cut_w / 2.0, top_z - sink_d))
+            stove = Part.makeBox(cut_l, cut_w, stove_d)
+            stove.translate(FreeCAD.Vector(x0 + length * 0.6, -cut_w / 2.0, top_z - stove_d))
+            c = c.cut(sink).cut(stove)
+        if contour and params.fascia:
+            # A fascia panel hanging under the front edge, overlapping the worktop.
+            fascia = Part.makeBox(length, params.fascia_thickness, counter_h * 0.18)
+            fascia.translate(
+                FreeCAD.Vector(x0, -width / 2.0, z0 - counter_h * 0.18 + thick * 0.4)
+            )
+            c = c.fuse(fascia)
+        return c
+
+    counter = _make_counter(contour=params.contoured)
+    if params.contoured and (len(counter.Solids) != 1 or not counter.isValid()):
+        counter = _make_counter(contour=False)  # manifold-or-fallback gate
 
     obj = target_doc.addObject("Part::Feature", f"{label}_GalleyCounter")
     obj.Shape = counter
@@ -1000,8 +1246,13 @@ def _build_galley_counter(
 def _build_head_fittings(
     spec: CompartmentSpec, params: HeadParameters, label: str, target_doc: Any, added: list[Any]
 ) -> list[Any]:
-    """head → a toilet box + a sink box against the walls."""
+    """head → a toilet + a sink against the walls.
+
+    spec 024: when ``contoured`` the toilet is a rounded pedestal fused with a
+    bowl and the sink gains a faucet (stem + spout); else the spec 012 boxes.
+    """
     import FreeCAD
+    import Part
 
     toilet_h = params.toilet_height
     sink_h = params.sink_height
@@ -1011,16 +1262,53 @@ def _build_head_fittings(
     aft_x = (spec.position.x + spec.dimensions.length) * _M_TO_MM
     half_w = spec.dimensions.width / 2.0 * _M_TO_MM
     wall_gap = 0.1 * _M_TO_MM
-    return [
-        _box(
-            target_doc, added, f"{label}_Toilet",
-            FreeCAD.Vector(x0 + wall_gap, -tw / 2.0, z0), (tl, tw, toilet_h),
-        ),
-        _box(
-            target_doc, added, f"{label}_Sink",
-            FreeCAD.Vector(aft_x - wall_gap - sl, half_w - sw, z0 + sink_h - st), (sl, sw, st),
-        ),
-    ]
+    toilet_origin = FreeCAD.Vector(x0 + wall_gap, -tw / 2.0, z0)
+    sink_origin = FreeCAD.Vector(aft_x - wall_gap - sl, half_w - sw, z0 + sink_h - st)
+
+    if not params.contoured:
+        return [
+            _box(target_doc, added, f"{label}_Toilet", toilet_origin, (tl, tw, toilet_h)),
+            _box(target_doc, added, f"{label}_Sink", sink_origin, (sl, sw, st)),
+        ]
+
+    bodies: list[Any] = []
+    # Toilet: rounded pedestal fused with a bowl cylinder on top.
+    toilet_shape = None
+    try:
+        ped = _rounded_box_shape(toilet_origin, (tl, tw, toilet_h), params.toilet_fillet)
+        br = min(params.bowl_radius, tl / 2.1, tw / 2.1)
+        bowl = Part.makeCylinder(br, br * 0.7)
+        bowl.translate(FreeCAD.Vector(x0 + wall_gap + tl / 2.0, 0.0, z0 + toilet_h))
+        fused = ped.fuse(bowl)
+        if len(fused.Solids) == 1 and fused.isValid():
+            toilet_shape = fused
+    except Exception:
+        toilet_shape = None
+    bodies.append(
+        _finalize_piece(
+            target_doc, added, f"{label}_Toilet", toilet_shape, (toilet_origin, (tl, tw, toilet_h))
+        )
+    )
+    # Sink + faucet (stem + spout). The sink stays a box; the faucet is its own
+    # small fitting (a fused stem+spout, or two pieces if they don't merge).
+    bodies.append(_box(target_doc, added, f"{label}_Sink", sink_origin, (sl, sw, st)))
+    if params.faucet:
+        try:
+            fx = aft_x - wall_gap - sl * 0.7
+            fy = half_w - sw * 0.5
+            fz = z0 + sink_h
+            stem = Part.makeCylinder(15.0, params.faucet_height)
+            stem.translate(FreeCAD.Vector(fx, fy, fz))
+            spout = Part.makeCylinder(10.0, params.faucet_height * 0.6)
+            spout.rotate(FreeCAD.Vector(fx, fy, fz + params.faucet_height), FreeCAD.Vector(0, 1, 0), 55)
+            faucet = stem.fuse(spout)
+            obj = target_doc.addObject("Part::Feature", f"{label}_Faucet")
+            obj.Shape = faucet
+            added.append(obj)
+            bodies.append(obj)
+        except Exception:
+            pass
+    return bodies
 
 
 def _build_salon_furniture(
@@ -1037,11 +1325,16 @@ def _build_salon_furniture(
     end_gap = 0.1 * _M_TO_MM
     side_gap = 0.05 * _M_TO_MM
     settee_d = 0.5 * _M_TO_MM
-    settee = _box(
-        target_doc, added, f"{label}_Settee",
-        FreeCAD.Vector(x0 + end_gap, -width / 2.0 + side_gap, z0),
-        (length - 2 * end_gap, settee_d, seat_h),
-    )
+    settee_origin = FreeCAD.Vector(x0 + end_gap, -width / 2.0 + side_gap, z0)
+    settee_size = (length - 2 * end_gap, settee_d, seat_h)
+    if params.contoured:
+        settee = _finalize_piece(
+            target_doc, added, f"{label}_Settee",
+            _cushion_shape(settee_origin, settee_size, params),
+            (settee_origin, settee_size),
+        )
+    else:
+        settee = _box(target_doc, added, f"{label}_Settee", settee_origin, settee_size)
     table_top_t = 0.04 * _M_TO_MM
     table_l, table_w = length * 0.4, width * 0.4
     cx = x0 + length / 2.0
@@ -1093,17 +1386,44 @@ def _build_helm(
 def _build_bulkhead(
     spec: CompartmentSpec, params: BulkheadParameters, label: str, target_doc: Any, added: list[Any]
 ) -> Any:
-    """A thin partition box at the compartment's aft boundary."""
+    """A thin partition at the compartment's aft boundary.
+
+    spec 024: when ``contoured`` the panel has rounded vertical corners and,
+    where it is tall/wide enough, a rounded-top doorway opening; else the spec
+    012 plain box. Kept a single valid solid (manifold-or-box fallback).
+    """
     import FreeCAD
+    import Part
 
     thick = params.thickness
     aft_x = (spec.position.x + spec.dimensions.length) * _M_TO_MM - thick
     width = spec.dimensions.width * _M_TO_MM
     height = spec.dimensions.height * _M_TO_MM
-    return _box(
-        target_doc, added, f"{label}_Bulkhead",
-        FreeCAD.Vector(aft_x, -width / 2.0, spec.position.z * _M_TO_MM), (thick, width, height),
-    )
+    z0 = spec.position.z * _M_TO_MM
+    origin = FreeCAD.Vector(aft_x, -width / 2.0, z0)
+    size = (thick, width, height)
+
+    if not params.contoured:
+        return _box(target_doc, added, f"{label}_Bulkhead", origin, size)
+
+    shape = None
+    try:
+        panel = _rounded_box_shape(origin, size, params.corner_fillet, vertical_only=True)
+        dw = params.doorway_width
+        dh = params.doorway_height
+        if params.doorway and dw < width * 0.85 and dh < height * 0.92:
+            # Doorway: a through-X opening (rectangle + a half-cylinder arch top).
+            door = Part.makeBox(thick * 3.0, dw, dh)
+            door.translate(FreeCAD.Vector(aft_x - thick, -dw / 2.0, z0))
+            arch = Part.makeCylinder(dw / 2.0, thick * 3.0)
+            arch.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 1, 0), 90)
+            arch.translate(FreeCAD.Vector(aft_x - thick, 0.0, z0 + dh))
+            panel = panel.cut(door.fuse(arch))
+        if len(panel.Solids) == 1 and panel.isValid():
+            shape = panel
+    except Exception:
+        shape = None
+    return _finalize_piece(target_doc, added, f"{label}_Bulkhead", shape, (origin, size))
 
 
 def _build_furnished_compartment(

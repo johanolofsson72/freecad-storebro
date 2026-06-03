@@ -4,6 +4,44 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-06-03
+
+Spec 024 — interior contoured fittings. The furniture stops being a set of
+boxes. Berth and settee cushions are rounded, split into segments with seam
+gaps, and carry fabric detail: a grid of tufting-button dimples, a piping welt
+around the top edge, and a couple of fold creases. The toilet is a rounded
+pedestal with a bowl, and the sink gets a faucet. The galley worktop has rounded
+edges and an appliance fascia. Bulkheads get rounded corners and a rounded-top
+doorway where the headroom allows.
+
+Everything is built with `Part` B-rep ops on the existing furniture bodies — the
+interior's own idiom — and a spike confirmed every operation is byte-reproducible
+across builds (filleted and cut volumes come out identical), so the determinism
+tests stay green. Each contoured piece carries a manifold-or-box fallback: if a
+fillet, fuse, or cut would break the single-solid invariant, that piece reverts
+to its plain box. The galley counter's single-solid guard from spec 012 still
+holds through the contour and fascia.
+
+Contouring is on by default; `contoured=False` on any furniture group brings back
+the spec 012/013 boxes.
+
+### Added
+
+- Contoured + fabric-detailed cushions (`BerthParameters` / `SalonParameters`:
+  `contoured`, `cushion_segments`, `seam_gap`, fillet, `buttons_per_row`,
+  `button_rows`, `button_radius`, `piping`, `piping_radius`, `fold_creases`).
+- Contoured toilet + faucet (`HeadParameters`: `contoured`, `toilet_fillet`,
+  `bowl_radius`, `faucet`, `faucet_height`).
+- Galley rounded edges + fascia (`GalleyParameters`: `contoured`, `edge_fillet`,
+  `fascia`, `fascia_thickness`).
+- Curved bulkheads + doorways (`BulkheadParameters`: `contoured`,
+  `corner_fillet`, `doorway`, `doorway_width`, `doorway_height`).
+
+### Changed
+
+- Furnished interiors now build contoured fittings by default; no public type,
+  field, or function was removed.
+
 ## [1.9.0] - 2026-06-03
 
 Spec 023 — DS deckhouse detailing. The enclosed deck-saloon variant gets the
