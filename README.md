@@ -1,39 +1,60 @@
 # freecad-storebro
 
-> Parametric 3D model of a vintage Storebro motor yacht inside FreeCAD.
+A Python library that builds a parametric 3D model of a vintage Storebro motor yacht inside FreeCAD. Give it hull dimensions and an interior layout, and it produces an editable `.FCStd` document plus STEP, STL, and BREP exports. The default hull matches the Storebro Royal Cruiser 34, 1972 model year (LOA 10.35 m, beam 3.20 m), within ±1% on the principal dimensions. The geometry stays editable in the FreeCAD GUI — it is built from `PartDesign` and `Part` features, not baked into a mesh.
 
-`freecad-storebro` is an open-source Python library that builds a fully editable parametric model of a classic Storebro Royal Cruiser. Given a small set of hull parameters (LOA, beam, draft, deadrise, sheer, transom angle, freeboard), it produces a `Part::Body` you can compose with your own FreeCAD geometry — and a `.FCStd` document you can open in the FreeCAD GUI and edit dimension-by-dimension.
+The package is published on PyPI as `freecad-storebro` and imported as `storebro`.
 
-The canonical default hull matches the **Storebro Royal Cruiser 34, 1972 model year** (LOA 10.35 m, beam 3.20 m) within ±1% on principal dimensions.
+## What's in the repo
 
-## Installation
+The source lives under `src/storebro/`, one module per part of the boat:
+
+- `hull.py` — the parametric hull (LOA, beam, draft, deadrise, sheer line, transom angle, stem rake). A dense `Ruled=True` `PartDesign::AdditiveLoft` mirrored to a full hull.
+- `deck.py` — deck plate, cabin trunk, windshield, hardtop, pillars, railings, plus the deck hardware (rubrail, bow pulpit, lifelines, anchor locker, cleats). Also the DS deck-saloon (`styrhytt`) variant — an enclosed wheelhouse that replaces the open flybridge.
+- `interior.py` — cabins, galley, head, salon, bulkheads, and contoured furniture, driven by five canonical layouts (Alternativ1–5) loaded from YAML.
+- `propulsion.py` — engine bed, engine block, propeller shaft, propeller, and rudder. Twin-screw by default; single-screw on request.
+- `export.py` — the `.FCStd`, STEP, STL, and BREP writers. Same parameters give byte-identical output.
+- `render.py` — role-keyed colors and materials (gelcoat-white hull, teak trim, chrome hardware, glass windows, bronze running gear), stored as data properties on each body.
+- `cli.py` — the `storebro` command.
+
+The five interior layouts are YAML fixtures in `src/storebro/fixtures/` (`Alternativ1.yaml` through `Alternativ5.yaml`, plus `DsSaloon.yaml` for the deck-saloon variant). Each one describes its compartments — name, type, position, dimensions — so you can write your own layout file without touching the code.
+
+`docs/references/` holds the side-profile drawings (`Alternativ1.JPG`–`Alternativ5.JPG`) and the GRP hull-construction and lines drawings the geometry was derived from. `docs/examples/` has runnable quickstarts for the hull, deck, export, and CLI.
+
+The model is parameter-driven throughout — no hard-coded dimensions — and reproducible: the same inputs produce the same bytes, with hash-based regression tests in `tests/geometry/` and pure-Python parameter tests in `tests/unit/`.
+
+## Installing
 
 ```bash
 uv pip install freecad-storebro
+# or: pip install freecad-storebro
 ```
 
-FreeCAD 1.1 or later must be installed separately and on `PATH`. See "Supported FreeCAD versions" below.
+FreeCAD 1.1 or later must be installed separately and importable. The supported range (`>=1.1,<2.0`) is declared in `pyproject.toml` under `[tool.freecad-storebro]` and checked at runtime on the first `build_hull()` call — an unsupported FreeCAD version raises `HullConstructionError` before any geometry is built. Python 3.11 and 3.12 are supported.
 
-## Quickstart
+## Using it
+
+From the command line:
 
 ```bash
-pip install freecad-storebro
-
-# Build the canonical Storebro Royal Cruiser 34 1972:
+# Build the default Storebro Royal Cruiser 34, 1972, with the Alternativ3 interior:
 storebro build --out boat.FCStd
 
-# Inspect what shipped with the package:
-storebro list-layouts
-storebro info
+# Other formats export the hull body only:
+storebro build --out hull.step --format step   # also: stl, brep
+
+# The DS deck-saloon variant, single screw, no colors:
+storebro build --out ds.FCStd --superstructure ds --engine-count 1 --no-colors
+
+# Machine-readable result (format, target_path, byte_count, sha256, version):
+storebro build --out boat.FCStd --json
+
+storebro list-layouts   # the five canonical interior layouts
+storebro info           # package, Python, FreeCAD, and platform metadata
 ```
 
-Open `boat.FCStd` in FreeCAD — hull, deck, and the canonical Alternativ3 interior, all parametrically editable.
+`storebro build` also takes hull overrides — `--loa`, `--beam`, `--draft`, `--station-count` (3–81, higher is smoother) — and `--no-propulsion` for hull + deck + interior only. See `docs/examples/cli_quickstart.sh` for the full walkthrough.
 
-For the full CLI walkthrough see [`docs/examples/cli_quickstart.sh`](docs/examples/cli_quickstart.sh) or [`specs/005-cli-module/quickstart.md`](specs/005-cli-module/quickstart.md). For non-fcstd formats: `--format step | stl | brep` exports the hull body only (full-assembly STEP/STL/BREP is deferred to v1.1+).
-
-### Python API
-
-For programmatic use (custom parameters, variant studies, error handling), the underlying functions are also public:
+From Python, the build functions and parameter classes are public:
 
 ```python
 from storebro import build_hull, build_deck, build_interior, export_fcstd
@@ -45,31 +66,22 @@ art = export_fcstd(hull.document, "/tmp/boat.FCStd")
 print(f"wrote {art.byte_count} bytes, SHA-256 {art.sha256}")
 ```
 
-See [`docs/examples/`](docs/examples/) and the per-spec `quickstart.md` files for deeper walkthroughs.
+`build_propulsion` and `apply_render_attributes` are public too, along with the per-part parameter dataclasses. See `docs/examples/` for hull, deck, and export examples.
 
-## Supported FreeCAD versions
+## Status
 
-This library is tested and supported on:
+Current version is 1.10.0. The hull, deck, interior, propulsion, export, render, and CLI modules all work end-to-end, and the model is recognizable as an RC34 in the FreeCAD GUI. The geometry tier runs on FreeCAD 1.1.1.
 
-- **FreeCAD: `>=1.1, <2.0`** (declared in `pyproject.toml` under `[tool.freecad-storebro] supported_freecad`)
-- Python: 3.11, 3.12
+Known limits, all tracked in the specs:
 
-The version range is verified at runtime on the first invocation of `build_hull()` (lazy check); running on an unsupported FreeCAD version raises `HullConstructionError` immediately, before any geometry construction.
+- The hull is a dense `Ruled=True` loft, not a B-spline surface. A FreeCAD spike showed `Ruled=False` overshooting the beam by 12–141% on this profile, so smoothness comes from station density (31 by default) rather than interpolation. The quarter-circle bilge arc is deferred for the same reason — its tessellated mesh is not watertight — so the hull keeps a sharp chine.
+- Propulsion geometry is representative, not CAD-faithful: the engine is a block, the propeller blades are flat plates, the rudder is a foil plate.
+- Cross-invocation `.FCStd` byte determinism is still being worked (`storebro build` is byte-stable within a process, and STEP/STL/BREP are byte-stable across invocations).
 
-Per the project constitution (principle VII), the supported range is declared in BOTH `pyproject.toml` and this README. If you find these out of sync, please open an issue — it is a constitutional violation.
-
-## Project status
-
-v1.0.0 — all four library modules plus the CLI. The five specs are tracked in [`specs/INDEX.md`](specs/INDEX.md).
-
-| Module | Spec | Status |
-|---|---|---|
-| `storebro.hull` | [001](specs/001-hull-module/) | v1.0.0 |
-| `storebro.export` | [002](specs/002-export-module/) | v1.0.0 |
-| `storebro.deck` | [003](specs/003-deck-module/) | v1.0.0 |
-| `storebro.interior` | [004](specs/004-interior-module/) | v1.0.0 |
-| `storebro.cli` | [005](specs/005-cli-module/) | v1.0.0 |
+The full per-spec history is in `specs/INDEX.md` and `CHANGELOG.md`. The reference drawings are artistic side profiles, not engineering drawings, so dimensions are inferred to a ±1% tolerance rather than measured.
 
 ## License
 
-MIT. See [LICENSE](LICENSE) if present; otherwise the MIT text applies via the `license` field in `pyproject.toml`.
+MIT. The `license` field in `pyproject.toml` carries the MIT declaration; there is no separate `LICENSE` file in the repo yet.
+
+Author: Johan Olofsson.
