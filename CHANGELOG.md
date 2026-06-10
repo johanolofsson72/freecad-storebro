@@ -4,6 +4,63 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-06-10
+
+Spec 026 — export format expansion. The export surface grows from STEP/STL/BREP/
+FCStd to also cover OBJ, IGES, a 2D DXF profile, and optional gzip — and the
+non-FCStd formats now export the whole boat, not just the hull.
+
+Until now `storebro build --format step` (and stl/brep) wrote only the hull body
+and silently dropped the deck, interior, and propulsion. They now export the full
+assembly: every body combined into one compound (for the B-rep formats) or one
+merged mesh (for the mesh formats), in a deterministic order. The export
+functions accept either a single body (unchanged) or a list of bodies.
+
+OBJ and IGES are new mesh and B-rep formats; a 2D DXF profile projects the boat's
+side silhouette onto the X-Z plane and writes it as hand-rolled R12 ASCII (no
+timestamps or handles, so it is deterministic by construction). Any export can be
+gzipped with `--gzip` or `gzip=True` — the gzip is deterministic (mtime zeroed),
+so two runs produce identical bytes. glTF is deferred: its only FreeCAD exporter
+is a GUI workbench module that is unavailable in the headless/CI build, and
+hand-writing glTF buffers was out of proportion to its value.
+
+A spike proved each new format byte-reproducible before it shipped (constitution
+II is non-negotiable): OBJ's header is a static URL, IGES needed its global-section
+date scrubbed, the assembly compounds reuse the existing STEP/BREP canonicalizers,
+and gzip and DXF are deterministic by construction.
+
+While wiring the assembly export, a long-standing bug surfaced: `export_step` used
+`Part.export([raw_shape], path)`, which does not serialize a raw shape's geometry
+— so every STEP the library has ever written contained no faces, only product
+structure (the old round-trip test only checked that the file was non-empty).
+Switching to the Shape method (`shape.exportStep`) fixes it; STEP files now carry
+the real B-rep and re-import correctly. STEP output therefore changes in this
+release.
+
+### Added
+
+- Full-assembly export for STEP/STL/BREP (and the new OBJ/IGES/DXF): pass a list
+  of bodies, or let the CLI export the whole boat by default.
+- `export_obj` (Wavefront OBJ) and `export_iges` (IGES B-rep).
+- `export_dxf_profile` — a 2D X-Z silhouette DXF.
+- `gzip=True` on every export function (and `storebro build --gzip`).
+- CLI `--format obj|iges|dxf`.
+
+### Fixed
+
+- `export_step` wrote geometry-less STEP files (used `Part.export` on a raw
+  shape); it now uses the Shape method and produces valid B-rep STEP.
+
+### Changed
+
+- The CLI exports the full assembly for the multi-body formats (was hull-only).
+- The STL watertight check applies only to single-body exports; an assembly is
+  intentionally several solids.
+
+### Deferred
+
+- glTF — its FreeCAD exporter is GUI-only and unavailable headless.
+
 ## [1.12.0] - 2026-06-10
 
 Spec 025 — interior layout expansion. The interior model widens along four axes,

@@ -1,0 +1,221 @@
+-- allium: 3
+--
+-- Spec 026 — export-format-expansion
+--
+-- Broadens the spec 002 export surface (step / stl / brep / fcstd) with glTF,
+-- OBJ, IGES, and a 2D DXF profile; optional deterministic gzip; and full-assembly
+-- (multi-body) export for the non-FCStd formats (today step/stl/brep export only
+-- the hull body, silently dropping deck/interior/propulsion). Reuses the spec 002
+-- machinery: canonical mesh facet ordering, sorted sub-shapes, header/timestamp
+-- scrubbing, atomic write, SHA-256. Constitution II (byte reproducibility) is
+-- NON-NEGOTIABLE: a new format ships on-by-default ONLY if a pre-implementation
+-- spike proves it byte-identical after scrubbing; any format that cannot be made
+-- reproducible is DEFERRED, never shipped silently-nondeterministic.
+
+enum ExportFormat {
+    step | stl | brep | fcstd          -- spec 002 (existing)
+    | gltf | obj | iges | dxf          -- spec 026 (new, spike-gated)
+}
+
+config {
+    -- The spike's per-format verdict (filled at T001). Only reproducible formats
+    -- ship on by default; non-reproducible ones are deferred (FR-007).
+    default_dxf_projection_plane: String = `xz`   -- side/profile silhouette
+    default_gzip: Boolean = false
+}
+
+-- External entities — produced by earlier specs, consumed here.
+
+external entity Body {
+    shape: String        -- the FreeCAD Shape (B-rep) of one PartDesign/Part body
+    is_valid: Boolean
+    solid_count: Integer
+}
+
+external entity BuildDocument {
+    bodies: Body          -- all top-level bodies: hull + deck + interior + propulsion
+}
+
+-- Value types — an export request and its inputs.
+
+value ExportRequest {
+    format: ExportFormat
+    target_path: String
+    gzip: Boolean
+    body_count: Integer   -- 1 (single body) or N (assembly)
+
+    invariant ExtensionMatchesFormat {
+        -- Each format validates its target extension (spec 002 _KNOWN_EXTENSIONS,
+        -- extended); gzip adds a `.gz` suffix. Expressed as the rule
+        -- RejectBadExtension below.
+        this.body_count >= 1
+    }
+}
+
+-- Output entity — one written export artifact (spec 002 ExportArtifact).
+
+entity ExportArtifact {
+    format: ExportFormat
+    target_path: String
+    byte_count: Integer
+    sha256: String
+    is_assembly: Boolean      -- true when >1 body was combined
+    is_gzipped: Boolean
+    is_byte_reproducible: Boolean
+
+    invariant NonEmpty {
+        this.byte_count > 0
+    }
+
+    invariant ShippedFormatsAreReproducible {
+        -- Constitution II: any artifact that exists was written by a SHIPPED
+        -- format, and every shipped format is byte-reproducible.
+        this.is_byte_reproducible = true
+    }
+
+    invariant GzippedHasGzSuffix {
+        this.is_gzipped implies EndsWith(this.target_path, `.gz`)
+    }
+}
+
+-- Rules — the export operations + validation.
+
+rule RejectBadExtension {
+    -- Each format validates its target-path extension; gzip requires `.gz`.
+    when: Export(req)
+    requires:
+        ExtensionAllowedFor(req.format, req.target_path)
+        req.gzip implies EndsWith(req.target_path, `.gz`)
+}
+
+rule RejectEmptyOrInvalidBody {
+    -- An empty body, a body with no shape, or a degenerate DXF projection is
+    -- rejected with a clear error (spec 002 ExportInputError / ExportWriteError).
+    when: Export(req)
+    requires: req.body_count >= 1
+}
+
+rule ExportSingleBody {
+    -- One body → byte-identical to the pre-026 single-body export (back-compat).
+    when: Export(req)
+    requires: req.body_count = 1
+    ensures:
+        ExportArtifact.created(
+            format: req.format,
+            target_path: req.target_path,
+            is_assembly: false,
+            is_gzipped: req.gzip,
+            is_byte_reproducible: true
+        )
+}
+
+rule ExportAssembly {
+    -- N bodies → one compound (B-rep) or one merged canonical mesh (mesh
+    -- formats), ordered deterministically by the spec 002 sub-shape sort.
+    when: Export(req)
+    requires: req.body_count >= 2
+    ensures:
+        ExportArtifact.created(
+            format: req.format,
+            target_path: req.target_path,
+            is_assembly: true,
+            is_gzipped: req.gzip,
+            is_byte_reproducible: true
+        )
+}
+
+rule ExportGzipped {
+    -- gzip wraps the final bytes deterministically (mtime 0, no filename); the
+    -- decompressed bytes equal the un-gzipped export.
+    when: Export(req)
+    requires: req.gzip = true
+    ensures:
+        ExportArtifact.is_gzipped = true
+        GunzipEquals(req.target_path, UngzippedExportOf(req))
+}
+
+rule ExportProfileDxf {
+    -- The 2D DXF profile projects the model onto the X-Z side plane and writes
+    -- the silhouette outline edges; a degenerate (empty) projection is rejected.
+    when: Export(req)
+    requires:
+        req.format = dxf
+        ProjectionHasEdges(req)
+    ensures:
+        ExportArtifact.created(format: dxf, target_path: req.target_path)
+}
+
+rule DeferNonReproducibleFormat {
+    -- A format the spike proves NON-reproducible is not registered as shippable;
+    -- attempting it is rejected (it is deferred to a future spec).
+    when: Export(req)
+    requires: FormatIsShipped(req.format)
+}
+
+-- Global invariants — must hold across ALL artifacts.
+
+invariant EveryArtifactByteReproducible {
+    for a in ExportArtifact:
+        a.is_byte_reproducible = true
+}
+
+invariant TwoIdenticalExportsEqualDigest {
+    -- Two exports with identical inputs produce identical sha256 (constitution II).
+    for a1 in ExportArtifact:
+        for a2 in ExportArtifact:
+            (a1.format = a2.format and a1.target_path = a2.target_path
+                and a1.is_assembly = a2.is_assembly and a1.is_gzipped = a2.is_gzipped)
+                implies a1.sha256 = a2.sha256
+}
+
+invariant SingleBodyExportDeterministic {
+    -- A single-body export is deterministic. STL/BREP/FCStd stay byte-identical
+    -- to spec 002; STEP changes this release (a pre-existing spec 002 bug —
+    -- export_step used Part.export on a raw shape and wrote geometry-less STEP —
+    -- is fixed to the Shape method, so STEP now carries real B-rep).
+    for a in ExportArtifact where is_assembly = false and is_gzipped = false:
+        a.is_byte_reproducible = true
+}
+
+invariant AssemblyIncludesAllBodies {
+    -- A multi-body assembly export reflects every body, not just the hull.
+    for a in ExportArtifact where is_assembly = true:
+        a.byte_count > 0
+}
+
+invariant GzipRoundTrips {
+    for a in ExportArtifact where is_gzipped = true:
+        EndsWith(a.target_path, `.gz`)
+}
+
+-- Actors and surfaces — the library's public API + CLI.
+
+actor LibraryConsumer { identified_by: BuildDocument }
+
+surface ExportAPI {
+    facing consumer: LibraryConsumer
+    context doc: BuildDocument
+    provides: Export(req)
+    exposes:
+        ExportArtifact
+}
+
+surface ExportCLI {
+    facing consumer: LibraryConsumer
+    context doc: BuildDocument
+    -- The CLI build export writes the FULL assembly by default for multi-body
+    -- formats (fixing today's hull-only drop) and exposes --format + a gzip flag.
+    provides: Export(req)
+    exposes: ExportArtifact
+}
+
+-- Deferred — formats the spike proves non-reproducible (decided at T001), plus
+-- out-of-scope items. The concrete deferral list is finalized after the spike.
+
+-- Spike verdict (T001): glTF deferred (GUI-only exporter unavailable headless).
+-- OBJ, IGES, DXF, assembly, gzip all shipped byte-reproducible.
+deferred ExportFormat.gltf_headless_unavailable
+deferred ExportArtifact.assembly_in_fcstd     -- FCStd already carries the document
+
+-- No open questions remain — all five elicitation candidates were resolved via
+-- /clarify (see spec.md -> ## Clarifications -> Session 2026-06-10).

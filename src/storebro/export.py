@@ -39,7 +39,10 @@ __all__ = [
     "ExportInputError",
     "ExportWriteError",
     "export_brep",
+    "export_dxf_profile",
     "export_fcstd",
+    "export_iges",
+    "export_obj",
     "export_step",
     "export_stl",
 ]
@@ -158,6 +161,10 @@ _KNOWN_EXTENSIONS: dict[str, tuple[str, ...]] = {
     "stl": (".stl",),
     "brep": (".brep", ".brp"),
     "fcstd": (".FCStd", ".fcstd"),
+    # spec 026 — new formats (glTF deferred: GUI-only exporter unavailable headless).
+    "obj": (".obj",),
+    "iges": (".iges", ".igs"),
+    "dxf": (".dxf",),
 }
 
 
@@ -165,13 +172,19 @@ def _resolve_target_path(
     path: str | os.PathLike[str],
     format_key: str,
     overwrite: bool,
+    gzip_enabled: bool = False,
 ) -> Path:
     """Validate and resolve the target path for a writer.
 
+    spec 026: when ``gzip_enabled`` the path must end in ``.gz`` and the inner
+    extension (before ``.gz``) must match the format; otherwise the path's own
+    extension must match.
+
     Raises:
         ExportInputError: Path is empty, parent dir missing, target is a
-            directory, extension does not match the writer's set, or
-            target exists with ``overwrite=False``.
+            directory, extension does not match the writer's set, ``.gz``
+            present/absent mismatching ``gzip_enabled``, or target exists with
+            ``overwrite=False``.
     """
     if path is None or str(path) == "":
         raise ExportInputError("target_path", "must not be empty", repr(path))
@@ -198,12 +211,33 @@ def _resolve_target_path(
         )
 
     expected = _KNOWN_EXTENSIONS[format_key]
-    if resolved.suffix not in expected:
-        raise ExportInputError(
-            "target_path",
-            f"extension must be one of {expected} for {format_key}",
-            resolved.suffix or "<no extension>",
-        )
+    if gzip_enabled:
+        if resolved.suffix != ".gz":
+            raise ExportInputError(
+                "target_path",
+                "gzip=True requires a .gz suffix (e.g. boat.stl.gz)",
+                resolved.suffix or "<no extension>",
+            )
+        inner_suffix = Path(resolved.stem).suffix
+        if inner_suffix not in expected:
+            raise ExportInputError(
+                "target_path",
+                f"inner extension must be one of {expected} for {format_key} before .gz",
+                inner_suffix or "<no inner extension>",
+            )
+    else:
+        if resolved.suffix == ".gz":
+            raise ExportInputError(
+                "target_path",
+                "a .gz suffix requires gzip=True",
+                ".gz",
+            )
+        if resolved.suffix not in expected:
+            raise ExportInputError(
+                "target_path",
+                f"extension must be one of {expected} for {format_key}",
+                resolved.suffix or "<no extension>",
+            )
 
     if not overwrite and resolved.is_file():
         raise ExportInputError(
@@ -213,6 +247,64 @@ def _resolve_target_path(
         )
 
     return resolved
+
+
+def _maybe_gzip(data: bytes, enabled: bool) -> bytes:
+    """Deterministically gzip ``data`` when ``enabled`` (mtime 0, no filename)."""
+    if not enabled:
+        return data
+    import gzip as _gzip
+
+    return _gzip.compress(data, compresslevel=9, mtime=0)
+
+
+def _as_body_list(body_or_bodies: Any) -> list[Any]:
+    """Normalize a single body or an iterable of bodies to a non-empty list."""
+    if hasattr(body_or_bodies, "Shape"):
+        return [body_or_bodies]
+    try:
+        bodies = list(body_or_bodies)
+    except TypeError as exc:
+        raise ExportInputError(
+            "body", "must be a body or an iterable of bodies", repr(body_or_bodies)
+        ) from exc
+    if not bodies:
+        raise ExportInputError("body", "must not be an empty iterable", repr(body_or_bodies))
+    return bodies
+
+
+def _combine_bodies(body_or_bodies: Any) -> Any:
+    """Combine one body (back-compat: its Shape) or N bodies (a Compound) → Shape.
+
+    A single body returns its ``.Shape`` unchanged so single-body exports stay
+    byte-identical to spec 002; multiple bodies form a ``Part.Compound`` (the
+    caller applies ``_sorted_subshapes`` for a deterministic order).
+    """
+    bodies = _as_body_list(body_or_bodies)
+    for b in bodies:
+        _validate_body(b)
+    if len(bodies) == 1:
+        return bodies[0].Shape
+    import Part
+
+    return Part.Compound([b.Shape for b in bodies])
+
+
+def _combine_meshes(body_or_bodies: Any, tessellation_tolerance_m: float) -> Any:
+    """Merge per-body canonical meshes (sorted order) into one canonical Mesh."""
+    import Mesh
+
+    bodies = _as_body_list(body_or_bodies)
+    for b in bodies:
+        _validate_body(b)
+    if len(bodies) == 1:
+        return _build_canonical_mesh(bodies[0].Shape, tessellation_tolerance_m)
+    # Combine the bodies' shapes into a sorted compound, then mesh the whole —
+    # one canonical facet ordering over the merged shape (deterministic).
+    combined = _sorted_subshapes(_combine_bodies(bodies))
+    merged = _build_canonical_mesh(combined, tessellation_tolerance_m)
+    assert isinstance(merged, Mesh.Mesh)
+    return merged
 
 
 def _resolve_tessellation_tolerance(value: float) -> float:
@@ -666,13 +758,17 @@ def export_step(
     target_path: str | os.PathLike[str],
     *,
     overwrite: bool = True,
+    gzip: bool = False,
 ) -> ExportArtifact:
-    """Write a FreeCAD Body's shape to an AP214 STEP file.
+    """Write a FreeCAD Body (or assembly of bodies) to an AP214 STEP file.
 
     Args:
-        body: A FreeCAD object with a non-empty ``.Shape`` attribute.
-        target_path: Destination file path. Must end in ``.step`` or ``.stp``.
+        body: A FreeCAD object with a non-empty ``.Shape``, OR (spec 026) an
+            iterable of such bodies combined into one deterministic compound.
+        target_path: Destination file path. Must end in ``.step``/``.stp``
+            (or that + ``.gz`` when ``gzip=True``).
         overwrite: If False, raises :class:`ExportInputError` when target exists.
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
 
     Returns:
         :class:`ExportArtifact` with the SHA-256 of the produced bytes.
@@ -690,10 +786,7 @@ def export_step(
         >>> # 'step'
     """
     _ensure_freecad_supported("step")
-    resolved = _resolve_target_path(target_path, "step", overwrite)
-    _validate_body(body)
-
-    import Part
+    resolved = _resolve_target_path(target_path, "step", overwrite, gzip)
 
     _set_step_schema_to_ap214()
     started = time.perf_counter()
@@ -705,10 +798,14 @@ def export_step(
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:
-        canonical = _sorted_subshapes(body.Shape)
-        Part.export([canonical], str(tmp_path))
+        canonical = _sorted_subshapes(_combine_bodies(body))
+        # spec 026 fix: `Part.export([raw_shape], path)` does NOT serialize a raw
+        # Part.Shape's geometry (it expects document objects) — every STEP was
+        # geometry-less. The Shape method writes the real B-rep (matches the
+        # exportBrep/exportIges idiom).
+        canonical.exportStep(str(tmp_path))
         raw = _read_bytes(tmp_path)
-        scrubbed = _canonicalize_step_header(raw)
+        scrubbed = _maybe_gzip(_canonicalize_step_header(raw), gzip)
     except ExportInputError:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -742,13 +839,17 @@ def export_brep(
     target_path: str | os.PathLike[str],
     *,
     overwrite: bool = True,
+    gzip: bool = False,
 ) -> ExportArtifact:
-    """Write a FreeCAD Body's shape to an OpenCASCADE BREP file.
+    """Write a FreeCAD Body (or assembly of bodies) to an OpenCASCADE BREP file.
 
     Args:
-        body: A FreeCAD object with a non-empty ``.Shape`` attribute.
-        target_path: Destination file path. Must end in ``.brep`` or ``.brp``.
+        body: A FreeCAD object with a non-empty ``.Shape``, OR (spec 026) an
+            iterable of such bodies combined into one deterministic compound.
+        target_path: Destination file path. Must end in ``.brep``/``.brp``
+            (or that + ``.gz`` when ``gzip=True``).
         overwrite: If False, raises :class:`ExportInputError` when target exists.
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
 
     Returns:
         :class:`ExportArtifact` with the SHA-256 of the produced bytes.
@@ -759,8 +860,7 @@ def export_brep(
         >>> # 'brep'
     """
     _ensure_freecad_supported("brep")
-    resolved = _resolve_target_path(target_path, "brep", overwrite)
-    _validate_body(body)
+    resolved = _resolve_target_path(target_path, "brep", overwrite, gzip)
 
     started = time.perf_counter()
     tmp_fd, tmp_name = tempfile.mkstemp(
@@ -771,10 +871,10 @@ def export_brep(
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:
-        canonical = _sorted_subshapes(body.Shape)
+        canonical = _sorted_subshapes(_combine_bodies(body))
         canonical.exportBrep(str(tmp_path))
         raw = _read_bytes(tmp_path)
-        scrubbed = _canonicalize_brep_header(raw)
+        scrubbed = _maybe_gzip(_canonicalize_brep_header(raw), gzip)
     except ExportInputError:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -809,15 +909,19 @@ def export_stl(
     *,
     overwrite: bool = True,
     tessellation_tolerance: float = 0.001,
+    gzip: bool = False,
 ) -> ExportArtifact:
-    """Write a FreeCAD Body's shape to a binary STL file.
+    """Write a FreeCAD Body (or assembly of bodies) to a binary STL file.
 
     Args:
-        body: A FreeCAD object with a non-empty ``.Shape`` attribute.
-        target_path: Destination file path. Must end in ``.stl``.
+        body: A FreeCAD object with a non-empty ``.Shape``, OR (spec 026) an
+            iterable of such bodies merged into one canonical mesh.
+        target_path: Destination file path. Must end in ``.stl`` (or that +
+            ``.gz`` when ``gzip=True``).
         overwrite: If False, raises :class:`ExportInputError` when target exists.
         tessellation_tolerance: Absolute linear chord deviation, in meters.
             Default 0.001 (1 mm). Must be > 0.
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
 
     Returns:
         :class:`ExportArtifact` with the SHA-256 of the produced bytes.
@@ -828,8 +932,7 @@ def export_stl(
         >>> # 'stl'
     """
     _ensure_freecad_supported("stl")
-    resolved = _resolve_target_path(target_path, "stl", overwrite)
-    _validate_body(body)
+    resolved = _resolve_target_path(target_path, "stl", overwrite, gzip)
     tolerance = _resolve_tessellation_tolerance(tessellation_tolerance)
 
     started = time.perf_counter()
@@ -841,10 +944,14 @@ def export_stl(
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:
-        mesh = _build_canonical_mesh(body.Shape, tolerance)
-        _check_watertight(mesh, "stl", resolved)
+        mesh = _combine_meshes(body, tolerance)
+        # The watertight check is a single-body invariant; an assembly is
+        # intentionally several solids whose merged mesh may self-intersect where
+        # bodies touch, so apply the check only to a single body (spec 026).
+        if len(_as_body_list(body)) == 1:
+            _check_watertight(mesh, "stl", resolved)
         mesh.write(str(tmp_path), "STLB")
-        raw = _read_bytes(tmp_path)
+        raw = _maybe_gzip(_read_bytes(tmp_path), gzip)
     except (ExportInputError, ExportWriteError):
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -878,6 +985,7 @@ def export_fcstd(
     target_path: str | os.PathLike[str],
     *,
     overwrite: bool = True,
+    gzip: bool = False,
 ) -> ExportArtifact:
     """Write a FreeCAD Document to a deterministic .FCStd archive.
 
@@ -895,7 +1003,7 @@ def export_fcstd(
         >>> # 'fcstd'
     """
     _ensure_freecad_supported("fcstd")
-    resolved = _resolve_target_path(target_path, "fcstd", overwrite)
+    resolved = _resolve_target_path(target_path, "fcstd", overwrite, gzip)
     if document is None:
         raise ExportInputError("document", "must not be None")
     if not hasattr(document, "saveAs"):
@@ -917,7 +1025,7 @@ def export_fcstd(
         document.recompute()
         document.saveAs(str(tmp_path))
         raw_zip = _read_bytes(tmp_path)
-        scrubbed = _scrub_fcstd_zip(raw_zip)
+        scrubbed = _maybe_gzip(_scrub_fcstd_zip(raw_zip), gzip)
     except ExportInputError:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -941,6 +1049,244 @@ def export_fcstd(
         target_path=resolved,
         format="fcstd",
         byte_count=len(scrubbed),
+        sha256=_sha256_of_file(resolved),
+        build_duration_seconds=duration,
+    )
+
+
+# ---------------------------------------------------------------------------
+# spec 026 — new format writers (OBJ, IGES, DXF profile)
+# ---------------------------------------------------------------------------
+
+# IGES global section carries a creation date token YYYYMMDD.HHMMSS (e.g.
+# 20260610.204357); zero it so two exports at different times are byte-identical.
+_IGES_DATE_RE = re.compile(rb"\d{8}\.\d{6}")
+_IGES_FIXED_DATE = b"00000000.000000"
+
+
+def _canonicalize_iges_header(raw_bytes: bytes) -> bytes:
+    """Scrub the IGES global-section creation date for byte determinism."""
+    return _IGES_DATE_RE.sub(_IGES_FIXED_DATE, raw_bytes).replace(b"\r\n", b"\n")
+
+
+def export_obj(
+    body: Any,
+    target_path: str | os.PathLike[str],
+    *,
+    overwrite: bool = True,
+    tessellation_tolerance: float = 0.001,
+    gzip: bool = False,
+) -> ExportArtifact:
+    """Write a FreeCAD Body (or assembly of bodies) to a Wavefront OBJ file.
+
+    Args:
+        body: A body with a non-empty ``.Shape``, OR an iterable of bodies merged
+            into one canonical mesh.
+        target_path: Destination path. Must end ``.obj`` (or ``.obj.gz``).
+        overwrite: If False, raises :class:`ExportInputError` when target exists.
+        tessellation_tolerance: Chord deviation in meters (> 0, default 1 mm).
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
+
+    Returns:
+        :class:`ExportArtifact` with the SHA-256 of the produced bytes.
+
+    Example:
+        >>> # from storebro import build_hull, export_obj
+        >>> # art = export_obj(build_hull().body, "/tmp/boat.obj")
+        >>> # art.format
+        >>> # 'obj'
+    """
+    _ensure_freecad_supported("obj")
+    resolved = _resolve_target_path(target_path, "obj", overwrite, gzip)
+    tolerance = _resolve_tessellation_tolerance(tessellation_tolerance)
+
+    started = time.perf_counter()
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=resolved.parent, prefix=f".{resolved.name}.", suffix=".obj"
+    )
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+    try:
+        mesh = _combine_meshes(body, tolerance)
+        mesh.write(str(tmp_path))  # extension → OBJ
+        # The FreeCAD OBJ header is a static URL comment (no version/timestamp),
+        # so the raw bytes are already reproducible; normalize line endings only.
+        raw = _maybe_gzip(_read_bytes(tmp_path).replace(b"\r\n", b"\n"), gzip)
+    except (ExportInputError, ExportWriteError):
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise ExportWriteError(
+            f"FreeCAD failed while writing OBJ — {type(exc).__name__}: {exc}",
+            target_path=resolved,
+            underlying=exc,
+            format="obj",
+        ) from exc
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+
+    _atomic_write(resolved, raw)
+    duration = time.perf_counter() - started
+    return ExportArtifact(
+        target_path=resolved,
+        format="obj",
+        byte_count=len(raw),
+        sha256=_sha256_of_file(resolved),
+        build_duration_seconds=duration,
+    )
+
+
+def export_iges(
+    body: Any,
+    target_path: str | os.PathLike[str],
+    *,
+    overwrite: bool = True,
+    gzip: bool = False,
+) -> ExportArtifact:
+    """Write a FreeCAD Body (or assembly of bodies) to an IGES B-rep file.
+
+    Args:
+        body: A body with a non-empty ``.Shape``, OR an iterable of bodies
+            combined into one deterministic compound.
+        target_path: Destination path. Must end ``.iges``/``.igs`` (or + ``.gz``).
+        overwrite: If False, raises :class:`ExportInputError` when target exists.
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
+
+    Returns:
+        :class:`ExportArtifact` with the SHA-256 of the produced bytes.
+
+    Example:
+        >>> # from storebro import build_hull, export_iges
+        >>> # art = export_iges(build_hull().body, "/tmp/boat.iges")
+        >>> # art.format
+        >>> # 'iges'
+    """
+    _ensure_freecad_supported("iges")
+    resolved = _resolve_target_path(target_path, "iges", overwrite, gzip)
+
+    started = time.perf_counter()
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=resolved.parent, prefix=f".{resolved.name}.", suffix=".iges"
+    )
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+    try:
+        canonical = _sorted_subshapes(_combine_bodies(body))
+        canonical.exportIges(str(tmp_path))
+        raw = _maybe_gzip(_canonicalize_iges_header(_read_bytes(tmp_path)), gzip)
+    except ExportInputError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise ExportWriteError(
+            f"FreeCAD failed while writing IGES — {type(exc).__name__}: {exc}",
+            target_path=resolved,
+            underlying=exc,
+            format="iges",
+        ) from exc
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+
+    _atomic_write(resolved, raw)
+    duration = time.perf_counter() - started
+    return ExportArtifact(
+        target_path=resolved,
+        format="iges",
+        byte_count=len(raw),
+        sha256=_sha256_of_file(resolved),
+        build_duration_seconds=duration,
+    )
+
+
+def _project_edges_xz(shape: Any) -> list[tuple[float, float, float, float]]:
+    """Project a shape's edges onto the X-Z plane (drop Y) → sorted segments.
+
+    Each edge becomes one (x1, z1, x2, z2) segment using its endpoints; segments
+    are rounded (6 dp), de-duplicated, and sorted for deterministic output.
+    """
+    segs: set[tuple[float, float, float, float]] = set()
+    for edge in shape.Edges:
+        verts = edge.Vertexes
+        if len(verts) < 2:
+            continue
+        p, q = verts[0].Point, verts[-1].Point
+        segs.add((round(p.x, 6), round(p.z, 6), round(q.x, 6), round(q.z, 6)))
+    return sorted(segs)
+
+
+def _write_r12_dxf(segments: list[tuple[float, float, float, float]]) -> bytes:
+    """Hand-write a minimal AutoCAD R12 ASCII DXF (LINE entities, no handles).
+
+    R12 ASCII needs no timestamps or handles, so the output is deterministic by
+    construction given a sorted segment list.
+    """
+    lines = ["0", "SECTION", "2", "ENTITIES"]
+    for (x1, z1, x2, z2) in segments:
+        lines += [
+            "0", "LINE", "8", "0",
+            "10", f"{x1:.6f}", "20", f"{z1:.6f}", "30", "0.0",
+            "11", f"{x2:.6f}", "21", f"{z2:.6f}", "31", "0.0",
+        ]
+    lines += ["0", "ENDSEC", "0", "EOF"]
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def export_dxf_profile(
+    body: Any,
+    target_path: str | os.PathLike[str],
+    *,
+    plane: str = "xz",
+    overwrite: bool = True,
+    gzip: bool = False,
+) -> ExportArtifact:
+    """Write a 2D profile DXF — the model's silhouette projected onto a plane.
+
+    Args:
+        body: A body with a non-empty ``.Shape``, OR an iterable of bodies.
+        target_path: Destination path. Must end ``.dxf`` (or ``.dxf.gz``).
+        plane: Projection plane. Only ``"xz"`` (side/profile view) is supported.
+        overwrite: If False, raises :class:`ExportInputError` when target exists.
+        gzip: If True, deterministically gzip the output (path must end ``.gz``).
+
+    Returns:
+        :class:`ExportArtifact` with the SHA-256 of the produced bytes.
+
+    Raises:
+        ExportInputError: Unsupported plane, or a degenerate (no-edge) projection.
+
+    Example:
+        >>> # from storebro import build_hull, export_dxf_profile
+        >>> # art = export_dxf_profile(build_hull().body, "/tmp/boat.dxf")
+        >>> # art.format
+        >>> # 'dxf'
+    """
+    _ensure_freecad_supported("dxf")
+    if plane != "xz":
+        raise ExportInputError("plane", "only 'xz' (side profile) is supported", repr(plane))
+    resolved = _resolve_target_path(target_path, "dxf", overwrite, gzip)
+
+    started = time.perf_counter()
+    shape = _sorted_subshapes(_combine_bodies(body))
+    segments = _project_edges_xz(shape)
+    if not segments:
+        raise ExportInputError(
+            "body", "projection has no edges (degenerate profile)", repr(target_path)
+        )
+    raw = _maybe_gzip(_write_r12_dxf(segments), gzip)
+    _atomic_write(resolved, raw)
+    duration = time.perf_counter() - started
+    return ExportArtifact(
+        target_path=resolved,
+        format="dxf",
+        byte_count=len(raw),
         sha256=_sha256_of_file(resolved),
         build_duration_seconds=duration,
     )

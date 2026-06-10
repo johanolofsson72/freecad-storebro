@@ -44,7 +44,10 @@ from storebro.export import (
     ExportInputError,
     ExportWriteError,
     export_brep,
+    export_dxf_profile,
     export_fcstd,
+    export_iges,
+    export_obj,
     export_step,
     export_stl,
 )
@@ -97,7 +100,7 @@ from storebro.render import (
     role_for_label,
 )
 
-__version__ = "1.12.0"
+__version__ = "1.13.0"
 
 __all__ = [
     "PALETTE",
@@ -167,7 +170,10 @@ __all__ = [
     "build_interior",
     "build_propulsion",
     "export_brep",
+    "export_dxf_profile",
     "export_fcstd",
+    "export_iges",
+    "export_obj",
     "export_step",
     "export_stl",
     "main",

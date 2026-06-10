@@ -44,6 +44,9 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         # spec 021 (propulsion-fidelity) FR-012: build the running gear at spec
         # 014 placeholder fidelity (no foils/diesel/struts).
         "--no-propulsion-detail",
+        # spec 026 (export-format-expansion) FR-012: deterministic gzip of any
+        # output (the new obj/iges/dxf formats are --format VALUES, not flags).
+        "--gzip",
     }
 )
 

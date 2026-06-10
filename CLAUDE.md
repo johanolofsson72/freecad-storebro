@@ -185,7 +185,7 @@ Read these files WHEN you need them — do not load everything upfront:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/025-interior-layout-expansion/plan.md`.
+at `specs/026-export-format-expansion/plan.md`.
 <!-- SPECKIT END -->
 
 ## graphify

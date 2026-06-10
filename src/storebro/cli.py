@@ -36,7 +36,10 @@ from storebro.export import (
     ExportInputError,
     ExportWriteError,
     export_brep,
+    export_dxf_profile,
     export_fcstd,
+    export_iges,
+    export_obj,
     export_step,
     export_stl,
 )
@@ -93,7 +96,29 @@ _CANONICAL_LAYOUT_ORDER: tuple[str, ...] = (
     "Alternativ5",
 )
 
-_VALID_FORMATS: tuple[str, ...] = ("fcstd", "step", "stl", "brep")
+_VALID_FORMATS: tuple[str, ...] = (
+    "fcstd", "step", "stl", "brep",
+    # spec 026 — new shipped formats (glTF deferred: GUI-only exporter headless).
+    "obj", "iges", "dxf",
+)
+# Multi-body formats export the FULL assembly (hull + deck + interior +
+# propulsion); fcstd serializes the whole document already.
+_ASSEMBLY_FORMATS: frozenset[str] = frozenset({"step", "stl", "brep", "obj", "iges", "dxf"})
+
+
+def _gather_assembly_bodies(document: object, interior: object) -> list[object]:
+    """Collect every top-level result body for a full-assembly export (spec 026).
+
+    Takes all ``PartDesign::Body`` objects (hull, deck parts, propulsion parts,
+    glass panes, struts, ...) plus the interior compartment compounds (by name,
+    so the furniture pieces inside them are not double-counted).
+    """
+    interior_names = {c.body.Name for c in interior.compartments}  # type: ignore[attr-defined]
+    bodies: list[object] = []
+    for obj in document.Objects:  # type: ignore[attr-defined]
+        if obj.TypeId == "PartDesign::Body" or obj.Name in interior_names:
+            bodies.append(obj)
+    return bodies
 
 
 def _exit_code_for(exc: BaseException) -> int:
@@ -153,7 +178,12 @@ def _build_top_parser() -> argparse.ArgumentParser:
         "--tessellation",
         type=float,
         default=0.001,
-        help="STL tessellation tolerance in meters (only meaningful for --format stl). Default: 0.001.",
+        help="STL/OBJ tessellation tolerance in meters (mesh formats only). Default: 0.001.",
+    )
+    build_p.add_argument(
+        "--gzip",
+        action="store_true",
+        help="Deterministically gzip the output (the --out path must end in .gz).",
     )
     build_p.add_argument(
         "--superstructure",
@@ -308,7 +338,7 @@ def _run_build(args: argparse.Namespace) -> int:
         superstructure_variant=args.superstructure,
         apply_render_attributes=colors,
     )
-    build_interior(hull, deck, layout=args.layout, apply_render_attributes=colors)
+    interior = build_interior(hull, deck, layout=args.layout, apply_render_attributes=colors)
     if not args.no_propulsion:
         # A single-screw layout is centred (offset 0); twin uses the default offset.
         engine_count = args.engine_count
@@ -333,20 +363,31 @@ def _run_build(args: argparse.Namespace) -> int:
 
     artifact: ExportArtifact
     fmt = args.format
+    gzip = args.gzip
     if fmt == "fcstd":
-        artifact = export_fcstd(hull.document, args.out, overwrite=overwrite)
-    elif fmt == "step":
-        artifact = export_step(hull.body, args.out, overwrite=overwrite)
-    elif fmt == "brep":
-        artifact = export_brep(hull.body, args.out, overwrite=overwrite)
+        artifact = export_fcstd(hull.document, args.out, overwrite=overwrite, gzip=gzip)
     else:
-        assert fmt == "stl"
-        artifact = export_stl(
-            hull.body,
-            args.out,
-            overwrite=overwrite,
-            tessellation_tolerance=args.tessellation,
-        )
+        # spec 026 — the non-FCStd formats export the FULL assembly (was hull-only).
+        bodies = _gather_assembly_bodies(hull.document, interior)
+        if fmt == "step":
+            artifact = export_step(bodies, args.out, overwrite=overwrite, gzip=gzip)
+        elif fmt == "brep":
+            artifact = export_brep(bodies, args.out, overwrite=overwrite, gzip=gzip)
+        elif fmt == "iges":
+            artifact = export_iges(bodies, args.out, overwrite=overwrite, gzip=gzip)
+        elif fmt == "dxf":
+            artifact = export_dxf_profile(bodies, args.out, overwrite=overwrite, gzip=gzip)
+        elif fmt == "obj":
+            artifact = export_obj(
+                bodies, args.out, overwrite=overwrite,
+                tessellation_tolerance=args.tessellation, gzip=gzip,
+            )
+        else:
+            assert fmt == "stl"
+            artifact = export_stl(
+                bodies, args.out, overwrite=overwrite,
+                tessellation_tolerance=args.tessellation, gzip=gzip,
+            )
 
     if args.json:
         from storebro import __version__
