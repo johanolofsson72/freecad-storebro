@@ -1,12 +1,12 @@
-"""Geometry test: the furnished-layout gate (T006, repurposed for spec 013).
+"""Geometry test: the furnish-by-type dispatch (T006, repurposed for spec 013/025).
 
-Spec 012 furnished only Alt1/Alt2 and this test asserted Alt3-5 stayed boxy.
-Spec 013 widens the gate to all five canonical layouts; this test now asserts
-every canonical layout is furnished, and that a custom (non-canonical) YAML
-layout still stays boxy.
+Spec 012 furnished only Alt1/Alt2; spec 013 widened to all five canonical
+layouts; spec 025 drops the layout-name gate entirely so furniture is dispatched
+by compartment TYPE for every layout — custom (non-canonical) layouts now furnish
+too. This test asserts every canonical layout is furnished, and that a custom
+YAML layout's furnishable-type compartments are furnished (not boxed).
 
-Covers spec 013 FR-001, SC-006 + spec.allium AllCanonicalLayoutsFurnished /
-CustomLayoutsStayBoxy.
+Covers spec 013 FR-001 + spec 025 FR-002, SC-002.
 """
 
 from __future__ import annotations
@@ -48,12 +48,13 @@ def test_all_canonical_layouts_are_furnished(freecad_doc: object, layout: str) -
 
 
 @pytest.mark.requires_freecad
-def test_custom_layout_stays_boxy(freecad_doc: object, tmp_path: Path) -> None:
+def test_custom_layout_furnished_by_type(freecad_doc: object, tmp_path: Path) -> None:
+    # spec 025 — custom layouts now furnish by compartment type (FR-002).
     custom = tmp_path / "custom.yaml"
     custom.write_text(_CUSTOM_YAML, encoding="utf-8")
     hull = build_hull(document=freecad_doc)
     deck = build_deck(hull)
     interior = build_interior(hull, deck, layout=str(custom))
-    assert all(not c.is_furnished for c in interior.compartments)
+    assert all(c.is_furnished for c in interior.compartments)
     for c in interior.compartments:
-        assert c.furniture == ()
+        assert c.furniture != ()  # furnished, not a bare box

@@ -16,11 +16,11 @@ from storebro import build_deck, build_hull, build_interior
 
 _M_TO_MM = 1000.0
 
-# A single unfurnished compartment via a CUSTOM (non-canonical) layout name, so
-# build_interior takes the boxy `_build_compartment` path and `body` is one box
-# whose bounding box equals the compartment dimensions exactly (no furniture
-# insets / bulkhead trimming the extent — those would shorten a canonical
-# furnished compound, see test below).
+# A single compartment via a CUSTOM (non-canonical) layout. spec 025: custom
+# layouts now furnish by type, so this builds a furnished compound (berth +
+# bulkhead). The bulkhead spans the full compartment height/width and the berth
+# the length minus wall insets, so the compound bbox is still ~the compartment
+# dimensions in mm — the scale-regression property this test guards.
 _CUSTOM_LAYOUT = textwrap.dedent(
     """\
     schema_version: 1
@@ -46,18 +46,16 @@ def test_compartment_box_built_at_mm_scale(freecad_doc: object, tmp_path: Path) 
     interior = build_interior(hull, deck, layout=str(layout_file))
 
     cabin = interior.compartments[0]
-    assert not cabin.is_furnished  # custom layout → boxy placeholder
+    assert cabin.is_furnished  # spec 025 — custom layouts furnish by type
     bb = cabin.body.Shape.BoundBox
-    assert bb.XLength == pytest.approx(2400.0, rel=0.01)
-    assert bb.YLength == pytest.approx(2000.0, rel=0.01)
-    assert bb.ZLength == pytest.approx(1200.0, rel=0.01)
+    # mm scale: ~metres-in-mm (the bulkhead spans full H/W; the berth the length
+    # minus wall insets), not a sub-millimetre speck.
+    assert bb.XLength == pytest.approx(2400.0, rel=0.1)
+    assert bb.YLength == pytest.approx(2000.0, rel=0.1)
+    assert bb.ZLength == pytest.approx(1200.0, rel=0.1)
     # Positioned at position * 1000 (mm), not at the metre-magnitude origin speck.
-    assert bb.XMin == pytest.approx(0.4 * _M_TO_MM, abs=1e-3)
-    assert bb.ZMin == pytest.approx(0.5 * _M_TO_MM, abs=1e-3)
-
-    # GUI display properties (already mm) agree with the geometry (FR-008).
-    assert cabin.body.Length == pytest.approx(2400.0, rel=1e-9)
-    assert cabin.body.Height == pytest.approx(1200.0, rel=1e-9)
+    assert bb.XMin >= 0.4 * _M_TO_MM - 1.0
+    assert bb.ZMin == pytest.approx(0.5 * _M_TO_MM, abs=1.0)
 
 
 @pytest.mark.requires_freecad

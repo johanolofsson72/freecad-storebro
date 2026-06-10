@@ -61,6 +61,7 @@ from storebro.hull import (
 from storebro.interior import (
     BerthParameters,
     BulkheadParameters,
+    EngineRoomParameters,
     FurnitureParameters,
     GalleyParameters,
     HeadParameters,
@@ -68,6 +69,7 @@ from storebro.interior import (
     InteriorConstructionError,
     InteriorParameterError,
     SalonParameters,
+    WetLockerParameters,
     build_interior,
 )
 from storebro.propulsion import (
@@ -95,7 +97,7 @@ from storebro.render import (
     role_for_label,
 )
 
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 
 __all__ = [
     "PALETTE",
@@ -120,6 +122,7 @@ __all__ = [
     "EngineBedParameters",
     "EngineBlock",
     "EngineParameters",
+    "EngineRoomParameters",
     "ExportArtifact",
     "ExportInputError",
     "ExportWriteError",
@@ -154,6 +157,7 @@ __all__ = [
     "Shaft",
     "ShaftParameters",
     "Strut",
+    "WetLockerParameters",
     "WindshieldGlazingParameters",
     "WindshieldParameters",
     "__version__",

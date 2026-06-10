@@ -94,19 +94,21 @@ class TestSchemaValidation:
         assert exc_info.value.field == "compartments"
 
     def test_unknown_compartment_type_raises(self) -> None:
+        # spec 025: engine_room/aft_cabin/etc. are now valid; use a truly unknown one.
         raw = self._valid_minimum()
-        raw["compartments"][0]["type"] = "engine_room"
+        raw["compartments"][0]["type"] = "submarine_bay"
         with pytest.raises(InteriorParameterError) as exc_info:
             _validate_layout_schema(raw, "test")
         assert exc_info.value.compartment_name == "C1"
         assert exc_info.value.field == "type"
 
-    def test_position_y_not_zero_raises(self) -> None:
+    def test_position_y_non_zero_accepted(self) -> None:
+        # spec 025: the v1.0 centreline constraint is dropped — y!=0 parses fine
+        # (the transverse half-beam bound is enforced later, with the hull).
         raw = self._valid_minimum()
         raw["compartments"][0]["position"]["y"] = 0.5
-        with pytest.raises(InteriorParameterError) as exc_info:
-            _validate_layout_schema(raw, "test")
-        assert exc_info.value.field == "position.y"
+        spec = _validate_layout_schema(raw, "test")
+        assert spec.compartments[0].position.y == 0.5
 
     def test_duplicate_compartment_name_raises(self) -> None:
         raw = self._valid_minimum()
@@ -179,7 +181,16 @@ def test_ds_saloon_loads_and_validates() -> None:
 
 
 def test_ds_saloon_furnished() -> None:
-    from storebro.interior import _DS_LAYOUT_NAME, _FURNISHED_LAYOUTS  # type: ignore[attr-defined]
+    # spec 025 — furnishing is type-driven, not layout-name-gated. The DS layout
+    # still furnishes because all its compartment types are furnishable.
+    from storebro.interior import (  # type: ignore[attr-defined]
+        _DS_LAYOUT_NAME,
+        _FURNISHABLE_TYPES,
+        _load_layout,
+        _validate_layout_schema,
+    )
 
     assert _DS_LAYOUT_NAME == "DsSaloon"
-    assert "DsSaloon" in _FURNISHED_LAYOUTS
+    source, raw = _load_layout("DsSaloon")
+    spec = _validate_layout_schema(raw, source)
+    assert all(c.compartment_type in _FURNISHABLE_TYPES for c in spec.compartments)

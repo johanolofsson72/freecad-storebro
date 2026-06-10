@@ -35,6 +35,7 @@ from storebro.hull import Hull
 __all__ = [
     "BerthParameters",
     "BulkheadParameters",
+    "EngineRoomParameters",
     "FurnitureParameters",
     "GalleyParameters",
     "HeadParameters",
@@ -43,6 +44,7 @@ __all__ = [
     "InteriorConstructionError",
     "InteriorParameterError",
     "SalonParameters",
+    "WetLockerParameters",
     "build_interior",
 ]
 
@@ -146,8 +148,16 @@ class InteriorConstructionError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 _COMPARTMENT_TYPES: frozenset[str] = frozenset(
-    {"forward_cabin", "galley", "head", "salon", "helm"}  # spec 023: helm (DS)
+    {
+        "forward_cabin", "galley", "head", "salon", "helm",  # spec 023: helm (DS)
+        # spec 025: layout expansion.
+        "aft_cabin", "dinette", "engine_room", "wet_locker", "salon_galley",
+    }
 )
+# spec 025 — every compartment type is furnishable; furniture is dispatched by
+# TYPE for every layout (the layout-name gate is gone). A future structural-only
+# type would be excluded here and fall through to a plain box.
+_FURNISHABLE_TYPES: frozenset[str] = _COMPARTMENT_TYPES
 _CANONICAL_LAYOUT_NAMES: frozenset[str] = frozenset(
     {"Alternativ1", "Alternativ2", "Alternativ3", "Alternativ4", "Alternativ5"}
 )
@@ -474,6 +484,65 @@ class BulkheadParameters:
 
 
 @dataclass(frozen=True)
+class EngineRoomParameters:
+    """engine_room fitting: a representative engine-block-like solid (mm). Frozen.
+
+    spec 025. Built from the compartment footprint (inset by ``wall_inset``) with a
+    main block of ``block_height`` and a narrower raised top of ``raised_top_height``.
+
+    Example:
+        >>> EngineRoomParameters().block_height
+        600.0
+    """
+
+    wall_inset: float = 80.0
+    block_height: float = 600.0
+    raised_top_height: float = 150.0
+    raised_top_inset: float = 120.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("engine_room_wall_inset", self.wall_inset),
+            ("engine_room_block_height", self.block_height),
+            ("engine_room_raised_top_height", self.raised_top_height),
+            ("engine_room_raised_top_inset", self.raised_top_inset),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+
+
+@dataclass(frozen=True)
+class WetLockerParameters:
+    """wet_locker fitting: a locker box with internal shelves (mm). Frozen.
+
+    spec 025. Built from the compartment footprint (inset by ``wall_inset``) up to
+    ``locker_height``, with ``shelf_count`` internal shelves.
+
+    Example:
+        >>> WetLockerParameters().shelf_count
+        2
+    """
+
+    wall_inset: float = 80.0
+    locker_height: float = 1400.0
+    wall_thickness: float = 30.0
+    shelf_count: int = 2
+    shelf_thickness: float = 20.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("wet_locker_wall_inset", self.wall_inset),
+            ("wet_locker_locker_height", self.locker_height),
+            ("wet_locker_wall_thickness", self.wall_thickness),
+            ("wet_locker_shelf_thickness", self.shelf_thickness),
+        ):
+            if value <= 0:
+                raise _furniture_error(name, "must be > 0")
+        if self.shelf_count < 0:
+            raise _furniture_error("wet_locker_shelf_count", "must be >= 0")
+
+
+@dataclass(frozen=True)
 class FurnitureParameters:
     """Composite of the per-type furniture parameter dataclasses (data-model §1.6).
 
@@ -491,6 +560,9 @@ class FurnitureParameters:
     salon: SalonParameters = field(default_factory=SalonParameters)
     bulkhead: BulkheadParameters = field(default_factory=BulkheadParameters)
     helm: HelmParameters = field(default_factory=HelmParameters)  # spec 023 (DS)
+    # spec 025 — new-type fittings.
+    engine_room: EngineRoomParameters = field(default_factory=EngineRoomParameters)
+    wet_locker: WetLockerParameters = field(default_factory=WetLockerParameters)
 
 
 # ---------------------------------------------------------------------------
@@ -650,13 +722,9 @@ def _parse_compartment_entry(entry: Any, source: str, seen_names: set[str]) -> C
         )
 
     position = _parse_position(entry.get("position"), source, name)
-    if position.y != 0:
-        raise InteriorParameterError(
-            source,
-            name,
-            "position.y",
-            "must be 0 in v1.0 (asymmetric layouts deferred to v1.1+)",
-        )
+    # spec 025 — asymmetric layouts: position.y may be non-zero. The transverse
+    # bound (|y| + width/2 <= beam_max/2) is enforced in
+    # _validate_compartment_in_envelope, which has the hull parameters.
 
     dimensions = _parse_dimensions(entry.get("dimensions"), source, name)
 
@@ -820,6 +888,17 @@ def _validate_compartment_in_envelope(
             "dimensions.width",
             f"exceeds hull beam_max ({hp.beam_max} m)",
         )
+    # spec 025 — asymmetric placement: |y| + width/2 must stay within the hull
+    # half-beam (beam_max/2, the hull's widest half-beam — a parametric bound
+    # consistent with the metre-space validator).
+    if abs(spec.position.y) + spec.dimensions.width / 2.0 > hp.beam_max / 2.0:
+        raise InteriorParameterError(
+            source,
+            spec.name,
+            "position.y",
+            f"compartment extends past the hull half-beam "
+            f"(|y| + width/2 > beam_max/2 = {hp.beam_max / 2.0} m)",
+        )
     if spec.position.z < -hp.draft:
         raise InteriorParameterError(
             source,
@@ -839,7 +918,11 @@ def _validate_compartment_in_envelope(
 
 
 def _aabb_intersection_volume(c1: CompartmentSpec, c2: CompartmentSpec) -> float:
-    """AABB intersection volume for two compartments centered on Y=0."""
+    """AABB intersection volume for two compartments.
+
+    spec 025: each compartment is centred on its own ``position.y`` (was: all on
+    Y=0), so two compartments at the same X but opposite Y no longer overlap.
+    """
     # X overlap
     a_min = c1.position.x
     a_max = c1.position.x + c1.dimensions.length
@@ -847,10 +930,12 @@ def _aabb_intersection_volume(c1: CompartmentSpec, c2: CompartmentSpec) -> float
     b_max = c2.position.x + c2.dimensions.length
     x_overlap = max(0.0, min(a_max, b_max) - max(a_min, b_min))
 
-    # Y overlap (centered on 0)
-    a_half = c1.dimensions.width / 2.0
-    b_half = c2.dimensions.width / 2.0
-    y_overlap = max(0.0, min(a_half, b_half) - max(-a_half, -b_half))
+    # Y overlap (each centred on its own position.y)
+    a_y_min = c1.position.y - c1.dimensions.width / 2.0
+    a_y_max = c1.position.y + c1.dimensions.width / 2.0
+    b_y_min = c2.position.y - c2.dimensions.width / 2.0
+    b_y_max = c2.position.y + c2.dimensions.width / 2.0
+    y_overlap = max(0.0, min(a_y_max, b_y_max) - max(a_y_min, b_y_min))
 
     # Z overlap
     a_min_z = c1.position.z
@@ -930,6 +1015,7 @@ def _build_compartment(
     import Part
 
     half_w = spec.dimensions.width / 2.0 * _M_TO_MM
+    offset_y = spec.position.y * _M_TO_MM  # spec 025 — asymmetric (0 → unchanged)
     box = Part.makeBox(
         spec.dimensions.length * _M_TO_MM,
         spec.dimensions.width * _M_TO_MM,
@@ -937,7 +1023,7 @@ def _build_compartment(
     )
     box.translate(
         FreeCAD.Vector(
-            spec.position.x * _M_TO_MM, -half_w, spec.position.z * _M_TO_MM
+            spec.position.x * _M_TO_MM, offset_y - half_w, spec.position.z * _M_TO_MM
         )
     )
 
@@ -967,11 +1053,10 @@ def _build_compartment(
 # measurements embedded below are written at millimetre scale.
 # ---------------------------------------------------------------------------
 
-# spec 013: furniture now applies to all five canonical layouts (spec 012
-# enabled Alt1/Alt2). Reuse _CANONICAL_LAYOUT_NAMES so the two cannot drift.
-# Custom (non-canonical) YAML layouts keep boxy placeholders. The per-type
-# dispatch skips absent compartment types (Alternativ5 has no galley).
-_FURNISHED_LAYOUTS: frozenset[str] = _CANONICAL_LAYOUT_NAMES | {_DS_LAYOUT_NAME}
+# spec 025: furniture is dispatched by compartment TYPE for every layout (the
+# spec 012/013 layout-name gate `_FURNISHED_LAYOUTS` is removed). A compartment
+# whose type is in `_FURNISHABLE_TYPES` is furnished in canonical, DS, and custom
+# layouts alike; only a (currently non-existent) non-furnishable type boxes.
 
 
 def _box(target_doc: Any, added: list[Any], name: str, origin: Any, size: tuple[float, float, float]) -> Any:
@@ -1116,13 +1201,29 @@ def _validate_furniture_envelope(
     # Validation stays in metre-space: compartment height `h` is in metres, so
     # furniture heights (mm) are converted down via `/ _M_TO_MM` for comparison.
     h = spec.dimensions.height
-    if spec.compartment_type == "forward_cabin" and furniture.berth.base_height / _M_TO_MM >= h:
+    ctype = spec.compartment_type
+    # forward_cabin + aft_cabin → a berth.
+    if ctype in ("forward_cabin", "aft_cabin") and furniture.berth.base_height / _M_TO_MM >= h:
         raise InteriorParameterError(
             source, spec.name, "berth_base_height", "must be less than compartment height"
         )
-    if spec.compartment_type == "galley" and furniture.galley.counter_height / _M_TO_MM >= h:
+    # galley + salon_galley → a galley counter.
+    if ctype in ("galley", "salon_galley") and furniture.galley.counter_height / _M_TO_MM >= h:
         raise InteriorParameterError(
             source, spec.name, "galley_counter_height", "must be less than compartment height"
+        )
+    # spec 025 — engine_room block (+ raised top) and wet_locker carcass.
+    if ctype == "engine_room":
+        er_top = (furniture.engine_room.block_height + furniture.engine_room.raised_top_height)
+        if er_top / _M_TO_MM >= h:
+            raise InteriorParameterError(
+                source, spec.name, "engine_room_block_height",
+                "block + raised top must be less than compartment height",
+            )
+    if ctype == "wet_locker" and furniture.wet_locker.locker_height / _M_TO_MM >= h:
+        raise InteriorParameterError(
+            source, spec.name, "wet_locker_locker_height",
+            "must be less than compartment height",
         )
 
 
@@ -1426,6 +1527,84 @@ def _build_bulkhead(
     return _finalize_piece(target_doc, added, f"{label}_Bulkhead", shape, (origin, size))
 
 
+def _build_engine_room_fitting(
+    spec: CompartmentSpec, params: EngineRoomParameters, label: str,
+    target_doc: Any, added: list[Any],
+) -> list[Any]:
+    """engine_room → a representative engine-block-like solid (block + raised top).
+
+    spec 025. Analytic boxes (byte-reproducible, no lofts). Independent of the
+    propulsion module's engine bodies — this is interior furniture.
+    """
+    import FreeCAD
+
+    inset = params.wall_inset
+    length = spec.dimensions.length * _M_TO_MM - 2 * inset
+    width = spec.dimensions.width * _M_TO_MM - 2 * inset
+    x0 = spec.position.x * _M_TO_MM + inset
+    z0 = spec.position.z * _M_TO_MM
+    bodies = [
+        _box(
+            target_doc, added, f"{label}_EngineBlock",
+            FreeCAD.Vector(x0, -width / 2.0, z0), (length, width, params.block_height),
+        )
+    ]
+    top_inset = params.raised_top_inset
+    tl = length - 2 * top_inset
+    tw = width - 2 * top_inset
+    if tl > 0 and tw > 0:
+        bodies.append(
+            _box(
+                target_doc, added, f"{label}_EngineHead",
+                FreeCAD.Vector(x0 + top_inset, -tw / 2.0, z0 + params.block_height),
+                (tl, tw, params.raised_top_height),
+            )
+        )
+    return bodies
+
+
+def _build_wet_locker(
+    spec: CompartmentSpec, params: WetLockerParameters, label: str,
+    target_doc: Any, added: list[Any],
+) -> list[Any]:
+    """wet_locker → an open locker carcass (base + back + sides) + shelves.
+
+    spec 025. Analytic thin boxes — reads as a locker (open front, visible
+    shelves), each piece a single valid solid.
+    """
+    import FreeCAD
+
+    inset = params.wall_inset
+    t = params.wall_thickness
+    length = spec.dimensions.length * _M_TO_MM - 2 * inset
+    width = spec.dimensions.width * _M_TO_MM - 2 * inset
+    h = min(params.locker_height, spec.dimensions.height * _M_TO_MM - 2 * inset)
+    x0 = spec.position.x * _M_TO_MM + inset
+    z0 = spec.position.z * _M_TO_MM
+    y0 = -width / 2.0
+    bodies = [
+        # base
+        _box(target_doc, added, f"{label}_LockerBase",
+             FreeCAD.Vector(x0, y0, z0), (length, width, t)),
+        # back wall (forward end)
+        _box(target_doc, added, f"{label}_LockerBack",
+             FreeCAD.Vector(x0 + length - t, y0, z0), (t, width, h)),
+        # left + right sides
+        _box(target_doc, added, f"{label}_LockerSideL",
+             FreeCAD.Vector(x0, y0, z0), (length, t, h)),
+        _box(target_doc, added, f"{label}_LockerSideR",
+             FreeCAD.Vector(x0, y0 + width - t, z0), (length, t, h)),
+    ]
+    for i in range(params.shelf_count):
+        sz = z0 + (i + 1) * h / (params.shelf_count + 1)
+        bodies.append(
+            _box(target_doc, added, f"{label}_LockerShelf_{i + 1}",
+                 FreeCAD.Vector(x0 + t, y0 + t, sz),
+                 (length - 2 * t, width - 2 * t, params.shelf_thickness))
+        )
+    return bodies
+
+
 def _build_furnished_compartment(
     spec: CompartmentSpec,
     layout_name: str,
@@ -1433,32 +1612,62 @@ def _build_furnished_compartment(
     target_doc: Any,
     added: list[Any],
 ) -> Compartment:
-    """Build type-keyed furniture for one compartment, wrapped as a compound."""
+    """Build type-keyed furniture for one compartment, wrapped as a compound.
+
+    spec 025: dispatch covers the new types; `salon_galley` builds BOTH the salon
+    set and a galley counter; off-centre compartments (`position.y != 0`) have
+    every piece translated transversely (y=0 is byte-identical to pre-025).
+    """
+    import FreeCAD
     import Part
 
     label = _compartment_label(spec, layout_name)
     local_added: list[Any] = []
+    ctype = spec.compartment_type
     pieces: list[Any]
-    if spec.compartment_type == "forward_cabin":
+    galley_counter: Any | None = None
+    if ctype in ("forward_cabin", "aft_cabin"):
         pieces = _build_berth(spec, furniture.berth, label, target_doc, local_added)
-    elif spec.compartment_type == "galley":
+    elif ctype == "galley":
         pieces = _build_galley_counter(spec, furniture.galley, label, target_doc, local_added)
-    elif spec.compartment_type == "head":
+        galley_counter = pieces[0]
+    elif ctype == "head":
         pieces = _build_head_fittings(spec, furniture.head, label, target_doc, local_added)
-    elif spec.compartment_type == "salon":
+    elif ctype in ("salon", "dinette"):
         pieces = _build_salon_furniture(spec, furniture.salon, label, target_doc, local_added)
-    elif spec.compartment_type == "helm":
+    elif ctype == "helm":
         pieces = _build_helm(spec, furniture.helm, label, target_doc, local_added)
+    elif ctype == "engine_room":
+        pieces = _build_engine_room_fitting(
+            spec, furniture.engine_room, label, target_doc, local_added
+        )
+    elif ctype == "wet_locker":
+        pieces = _build_wet_locker(spec, furniture.wet_locker, label, target_doc, local_added)
+    elif ctype == "salon_galley":
+        pieces = _build_salon_furniture(spec, furniture.salon, label, target_doc, local_added)
+        galley_pieces = _build_galley_counter(
+            spec, furniture.galley, label, target_doc, local_added
+        )
+        galley_counter = galley_pieces[0]
+        pieces = [*pieces, *galley_pieces]
     else:  # pragma: no cover - guarded by _COMPARTMENT_TYPES at parse time
         pieces = []
     pieces.append(_build_bulkhead(spec, furniture.bulkhead, label, target_doc, local_added))
 
+    # spec 025 — asymmetric: shift every piece transversely by the compartment's
+    # y. Skipped entirely when y == 0 so canonical layouts are byte-identical.
+    offset_y = spec.position.y * _M_TO_MM
+    if offset_y != 0.0:
+        shift = FreeCAD.Vector(0.0, offset_y, 0.0)
+        for p in pieces:
+            p.Shape = p.Shape.translated(shift)
+
     target_doc.recompute()
 
-    # Galley counter manifold guard (FR-007): the cut worktop must stay a
-    # single closed solid.
-    if spec.compartment_type == "galley":
-        counter_shape = pieces[0].Shape
+    # Galley counter manifold guard (FR-008): the cut worktop must stay a single
+    # closed solid (galley and salon_galley both build a counter).
+    if galley_counter is not None:
+        counter_shape = galley_counter.Shape
         if len(counter_shape.Solids) != 1 or not counter_shape.isValid():
             raise InteriorConstructionError(
                 f"galley counter in {spec.name} is non-manifold after recess cuts "
@@ -1544,11 +1753,12 @@ def build_interior(
         _validate_compartment_in_envelope(spec, hull, resolved_source, headroom_budget_m)
     _validate_no_overlaps(layout_spec.compartments, resolved_source)
 
-    # spec 012 — resolve furniture; gate detailed furniture to Alt1/Alt2.
+    # spec 012/025 — resolve furniture. Dispatch is by compartment TYPE for every
+    # layout (the spec 012 layout-name gate is gone): a furnishable type is
+    # furnished in canonical, DS, and custom layouts alike (FR-002).
     furniture = parameters_furniture if parameters_furniture is not None else FurnitureParameters()
-    furnished = layout_spec.layout_name in _FURNISHED_LAYOUTS
-    if furnished:
-        for spec in layout_spec.compartments:
+    for spec in layout_spec.compartments:
+        if spec.compartment_type in _FURNISHABLE_TYPES:
             _validate_furniture_envelope(spec, furniture, resolved_source)
 
     target_doc = _resolve_document(hull, document)
@@ -1559,7 +1769,7 @@ def build_interior(
     try:
         compartments: list[Compartment] = []
         for spec in layout_spec.compartments:
-            if furnished:
+            if spec.compartment_type in _FURNISHABLE_TYPES:
                 compartment = _build_furnished_compartment(
                     spec, layout_spec.layout_name, furniture, target_doc, added
                 )

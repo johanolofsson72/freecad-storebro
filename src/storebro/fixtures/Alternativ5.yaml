@@ -13,7 +13,7 @@ compartments:
     dimensions: { length: 1.0, width: 1.4, height: 1.4 }
     description: Forward head
   - name: Salon
-    type: salon
+    type: salon_galley
     position: { x: 4.0, y: 0, z: 0.5 }
     dimensions: { length: 5.5, width: 2.6, height: 1.8 }
-    description: Combined salon with integrated galley (no separate galley)
+    description: Combined salon with integrated galley (settee + table + galley counter)

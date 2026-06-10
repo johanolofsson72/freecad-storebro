@@ -4,6 +4,52 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-06-10
+
+Spec 025 — interior layout expansion. The interior model widens along four axes,
+all in `interior.py`. Alternativ5's combined compartment was described as a
+salon with an integrated galley but only got a settee and table; it is now a new
+`salon_galley` compartment type that also builds a galley counter with sink and
+stove recesses. Custom layouts stop getting placeholder boxes: furniture is now
+dispatched by compartment type for every layout, so a YAML file you write
+yourself gets the same furniture the shipped layouts get. Four more compartment
+types exist: `aft_cabin` (a berth), `dinette` (settee + table), `engine_room`
+(a representative engine-block-like solid), and `wet_locker` (an open carcass
+with shelves). And the v1.0 rule that every compartment sits on the centreline is
+gone: a compartment can be placed off-centre, bounded by the hull half-beam.
+
+Canonical Alternativ1-4 and the DS layout build byte-identically to before — the
+off-centre code path is skipped entirely when y is zero, and only Alternativ5's
+fixture changed. New geometry is plain analytic boxes, fillets, and cuts, the
+spec 024 byte-reproducible class, so no reproducibility spike was needed. The
+spec 012 galley manifold guard still holds, now including the Alternativ5 galley.
+
+One thing surfaced during the work: the spec 024 head faucet is legitimately two
+disjoint solids, so "every piece is a single solid" was too strong. The real
+guarantee is that every piece is a valid, watertight (STL-exportable) shape, with
+single-solid required of the galley counter and the new-type fittings. The
+no-overlap check was also taught about `position.y` so two compartments at the
+same fore-aft station but opposite sides no longer count as overlapping.
+
+### Added
+
+- `salon_galley` compartment type — settee + table + galley counter in one
+  compartment (Alternativ5 uses it).
+- Furniture dispatched by compartment type for every layout; custom
+  (non-canonical) layouts now furnish instead of getting placeholder boxes.
+- Compartment types `aft_cabin`, `dinette`, `engine_room`, `wet_locker`.
+- `EngineRoomParameters` and `WetLockerParameters` (+ fields on
+  `FurnitureParameters`) for the two new bespoke fittings.
+- Off-centre compartment placement (`position.y != 0`), bounded by
+  `|y| + width/2 <= beam_max/2`.
+
+### Changed
+
+- `build_interior` furnishes by compartment type rather than by layout name; the
+  signature and the `Interior` aggregate are unchanged.
+- The no-overlap and furniture-fit validations account for off-centre placement
+  and the new compartment types.
+
 ## [1.11.0] - 2026-06-10
 
 Spec 021 — propulsion fidelity. The running gear stops being a set of stand-in

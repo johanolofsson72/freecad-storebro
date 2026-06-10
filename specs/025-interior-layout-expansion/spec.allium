@@ -1,0 +1,262 @@
+-- allium: 3
+--
+-- Spec 025 — interior-layout-expansion
+--
+-- Widens the spec 004/012/013/024 interior model along four independent axes,
+-- all in interior.py reusing the type-keyed furniture builders:
+--   1. A new `salon_galley` compartment type furnished with BOTH settee+table
+--      AND a galley counter (Alternativ5's combined compartment switches to it).
+--   2. Furniture is dispatched by compartment TYPE for every layout — the
+--      layout-name gate is removed, so custom (non-canonical) layouts furnish.
+--   3. Four more compartment types: aft_cabin, dinette, engine_room, wet_locker.
+--   4. The v1.0 centreline constraint (position.y = 0) is dropped; compartments
+--      may be off-centre, bounded transversely by the hull half-beam.
+-- Furniture stays Part::Feature B-rep solids (the spec 012 idiom); each furnished
+-- compartment is a Part::Compound; the spec 012 galley manifold guard holds. All
+-- new geometry uses analytic Part primitives (boxes/fillets/cuts/fuses), which
+-- spec 024 proved byte-reproducible — no lofts, no arc-loft reproducibility wall.
+
+enum CompartmentType {
+    forward_cabin | galley | head | salon | helm
+    | aft_cabin | dinette | engine_room | wet_locker | salon_galley
+}
+
+config {
+    -- Furnishable types get type-keyed furniture; others keep a structural box.
+    -- (engine_room is furnished with a representative engine-block-like solid.)
+    centreline_only: Boolean = false   -- spec 025 drops the v1.0 symmetry constraint
+}
+
+-- External entity — the hull supplies the transverse bound for off-centre
+-- compartments (half-beam at the compartment's longitudinal station).
+external entity HullBody {
+    half_beam_at_station_mm: Decimal
+    keel_z_min_mm: Decimal
+    sheer_height_fwd_m: Decimal
+}
+
+value Position3D {
+    x_m: Decimal
+    y_m: Decimal     -- spec 025: may be non-zero (asymmetric)
+    z_m: Decimal
+}
+
+value Dimensions3D {
+    length_m: Decimal
+    width_m: Decimal
+    height_m: Decimal
+
+    invariant PositiveDimensions {
+        this.length_m > 0
+        this.width_m > 0
+        this.height_m > 0
+    }
+}
+
+value CompartmentSpec {
+    name: String
+    compartment_type: CompartmentType
+    position: Position3D
+    dimensions: Dimensions3D
+
+    -- spec 025: transverse containment replaces the v1.0 `y = 0` rule.
+    invariant TransverseWithinHalfBeam {
+        -- |y| + width/2 must stay within the hull half-beam at this station.
+        -- (Bound supplied by HullBody at build time; expressed here as the rule
+        -- RejectOffCentrePastHalfBeam below.)
+        this.dimensions.width_m > 0
+    }
+}
+
+-- Output entity — one furnished (or structural) compartment.
+entity Compartment {
+    spec: CompartmentSpec
+    interior: Interior
+    is_furnished: Boolean
+    is_compound: Boolean when is_furnished = true
+    piece_count: Integer
+    all_pieces_valid: Boolean        -- every piece isValid() + STL-exportable
+    has_salon_furniture: Boolean
+    has_galley_counter: Boolean
+    galley_counter_single_solid: Boolean when has_galley_counter = true
+    transverse_offset_mm: Decimal
+
+    invariant FurnishedIsCompound {
+        this.is_furnished implies this.is_compound = true
+    }
+
+    invariant AllPiecesValid {
+        -- Every piece is a valid watertight shape. Some pre-existing fittings
+        -- (e.g. the spec 024 head faucet) are two disjoint valid solids; the
+        -- galley counter + new-type fittings are single solids (their own guards).
+        this.all_pieces_valid = true
+    }
+
+    invariant GalleyManifoldGuard {
+        -- The spec 012 guard: any galley counter is a single valid solid.
+        this.has_galley_counter implies this.galley_counter_single_solid = true
+    }
+
+    invariant SalonGalleyHasBoth {
+        -- A salon_galley compartment carries BOTH furniture sets.
+        this.spec.compartment_type = salon_galley
+            implies (this.has_salon_furniture = true and this.has_galley_counter = true)
+    }
+}
+
+entity Interior {
+    hull: HullBody
+    layout_name: String
+    is_canonical: Boolean
+    shape_digest: String
+    compartments: Compartment with interior = this
+
+    furnished_compartments: compartments where is_furnished = true
+
+    invariant DispatchByTypeNotLayoutName {
+        -- Furnishing depends on compartment type, never on the layout name —
+        -- custom layouts furnish exactly like canonical ones.
+        for c in this.compartments where IsFurnishableType(c.spec.compartment_type):
+            c.is_furnished = true
+    }
+}
+
+-- Rules — validation + the type-keyed furniture dispatch.
+
+rule RejectUnknownType {
+    when: ParseCompartment(entry, layout)
+    requires: entry.compartment_type in {
+        forward_cabin, galley, head, salon, helm,
+        aft_cabin, dinette, engine_room, wet_locker, salon_galley
+    }
+}
+
+rule RejectOffCentrePastHalfBeam {
+    -- Asymmetric placement is allowed, but must stay inside the hull transversely.
+    when: ValidateCompartment(spec, hull)
+    requires:
+        Abs(spec.position.y_m) + (spec.dimensions.width_m / 2)
+            <= hull.half_beam_at_station_mm / 1000
+}
+
+rule RejectFurnitureTallerThanCompartment {
+    -- The furniture-fit envelope guard applies to every furnishable type,
+    -- including the new ones (FR-005).
+    when: ValidateFurniture(spec, furniture)
+    requires:
+        IsFurnishableType(spec.compartment_type)
+            implies FurnitureMaxHeight(spec, furniture) < spec.dimensions.height_m
+}
+
+rule FurnishByType {
+    -- Dispatch furniture by compartment type for every layout (FR-002).
+    when: BuildCompartment(spec, hull, layout)
+    ensures:
+        if IsFurnishableType(spec.compartment_type):
+            Compartment.created(
+                spec: spec,
+                is_furnished: true,
+                is_compound: true,
+                all_pieces_valid: true
+            )
+}
+
+rule BuildSalonGalley {
+    -- salon_galley → settee + table + galley counter, all fused (FR-001).
+    when: BuildCompartment(spec, hull, layout)
+    requires: spec.compartment_type = salon_galley
+    ensures:
+        Compartment.created(
+            spec: spec,
+            is_furnished: true,
+            has_salon_furniture: true,
+            has_galley_counter: true,
+            galley_counter_single_solid: true,
+            all_pieces_valid: true
+        )
+}
+
+rule BuildNewTypeFitting {
+    -- aft_cabin → berth, dinette → settee+table, engine_room → engine-block-like
+    -- solid, wet_locker → locker fitting (FR-004).
+    when: BuildCompartment(spec, hull, layout)
+    requires: spec.compartment_type in {aft_cabin, dinette, engine_room, wet_locker}
+    ensures:
+        Compartment.created(
+            spec: spec,
+            is_furnished: true,
+            is_compound: true,
+            all_pieces_valid: true
+        )
+}
+
+rule PlaceFurnitureAtTransverseOffset {
+    -- Furniture follows the compartment's (possibly non-zero) y offset.
+    when: BuildCompartment(spec, hull, layout)
+    ensures:
+        Compartment.transverse_offset_mm = spec.position.y_m * 1000
+}
+
+rule RollbackOnConstructionFailure {
+    when: InteriorConstructionFails(interior)
+    ensures: DocumentRestoredToPreCallState(interior)
+}
+
+-- Global invariants — must hold across ALL interiors / compartments.
+
+invariant EveryFurniturePieceValid {
+    for c in Compartment:
+        c.all_pieces_valid = true
+}
+
+invariant GalleyCountersAlwaysManifold {
+    for c in Compartment where has_galley_counter = true:
+        c.galley_counter_single_solid = true
+}
+
+invariant FurnishingIsTypeDriven {
+    -- No layout-name gate: a furnishable type is furnished in any layout.
+    for c in Compartment where IsFurnishableType(c.spec.compartment_type):
+        c.is_furnished = true
+}
+
+invariant SalonGalleyCarriesBothSets {
+    for c in Compartment where spec.compartment_type = salon_galley:
+        c.has_salon_furniture = true
+        c.has_galley_counter = true
+}
+
+invariant DeterministicShapeDigest {
+    -- Two builds of the same layout with identical inputs → identical digest.
+    for i1 in Interior:
+        for i2 in Interior:
+            i1.layout_name = i2.layout_name implies i1.shape_digest = i2.shape_digest
+}
+
+invariant AsymmetricStaysInsideHull {
+    for c in Compartment:
+        Abs(c.spec.position.y_m) + (c.spec.dimensions.width_m / 2)
+            <= c.interior.hull.half_beam_at_station_mm / 1000
+}
+
+-- Actors and surfaces — the library's public API.
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface InteriorBuildAPI {
+    facing consumer: LibraryConsumer
+    context hull: HullBody
+    context layout_name: String
+    provides: BuildInterior(hull, layout_name)
+    exposes:
+        Interior
+        Compartment
+}
+
+-- Deferred — what spec 025 intentionally leaves out.
+
+deferred Compartment.contoured_new_type_fittings
+deferred Interior.non_rectangular_compartment_footprints
+
+-- No open questions remain — all four elicitation candidates were resolved via
+-- /clarify (see spec.md -> ## Clarifications -> Session 2026-06-10).
