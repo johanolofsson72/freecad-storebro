@@ -55,10 +55,25 @@ def test_cabin_windows_get_glass(freecad_doc: object) -> None:
 def test_deckhouse_windows_get_glass(freecad_doc: object) -> None:
     hull = build_hull(document=freecad_doc)
     deck = build_deck(hull, superstructure_variant="ds")
-    panes = _bodies(freecad_doc, "Deck_DeckhouseWindowGlass")
+    # The side-window panes are "Deck_DeckhouseWindowGlass{side}{n}"; the spec 023
+    # front-window pane "Deck_DeckhouseWindowGlassFront" shares the prefix, so
+    # exclude it here and count it separately below.
+    front = _bodies(freecad_doc, "Deck_DeckhouseWindowGlassFront")
+    panes = [
+        p
+        for p in _bodies(freecad_doc, "Deck_DeckhouseWindowGlass")
+        if p not in front
+    ]
     assert deck.deckhouse is not None
-    assert len(panes) == deck.deckhouse.window_count
+    assert len(panes) == deck.deckhouse.window_count  # one glass per side window
     for g in panes:
+        assert len(g.Shape.Solids) == 1 and g.Shape.isValid()
+    # The front-window pane exists iff the front window was cut (spec 023).
+    expected_front = (
+        1 if deck.deckhouse.has_front_window and not deck.deckhouse.front_window_skipped else 0
+    )
+    assert len(front) == expected_front
+    for g in front:
         assert len(g.Shape.Solids) == 1 and g.Shape.isValid()
     assert len(deck.deckhouse.body.Shape.Solids) == 1  # host unchanged
 

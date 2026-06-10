@@ -43,6 +43,8 @@ def test_new_propulsion_names_exported() -> None:
         "Rudder",
         "PropulsionParameterError",
         "PropulsionConstructionError",
+        # spec 021 (propulsion-fidelity): the strut/P-bracket support body.
+        "Strut",
     ]
     for name in new_names:
         assert name in storebro.__all__, f"{name} missing from public API"

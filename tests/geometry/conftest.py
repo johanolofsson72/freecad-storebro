@@ -31,3 +31,13 @@ def freecad_doc() -> Generator[Any, None, None]:
         yield doc
     finally:
         FreeCAD.closeDocument(doc.Name)
+
+
+@pytest.fixture
+def freecad_doc2() -> Generator[Any, None, None]:
+    """A second fresh document, for tests that compare two independent builds."""
+    doc = FreeCAD.newDocument("storebro_test_doc_2")
+    try:
+        yield doc
+    finally:
+        FreeCAD.closeDocument(doc.Name)

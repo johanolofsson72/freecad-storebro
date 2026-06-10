@@ -52,9 +52,13 @@ from storebro.interior import (
     build_interior,
 )
 from storebro.propulsion import (
+    EngineParameters,
+    PropellerParameters,
     PropulsionConstructionError,
     PropulsionParameterError,
     PropulsionParameters,
+    RudderParameters,
+    ShaftParameters,
     build_propulsion,
 )
 
@@ -188,6 +192,11 @@ def _build_top_parser() -> argparse.ArgumentParser:
         help="Skip the propulsion step (hull + deck + interior only).",
     )
     build_p.add_argument(
+        "--no-propulsion-detail",
+        action="store_true",
+        help="Build propulsion at spec 014 placeholder fidelity (no foils/diesel/struts).",
+    )
+    build_p.add_argument(
         "--no-colors",
         action="store_true",
         help="Build a neutral model: skip cosmetic colors + materials (FreeCAD default appearance).",
@@ -302,11 +311,24 @@ def _run_build(args: argparse.Namespace) -> int:
     build_interior(hull, deck, layout=args.layout, apply_render_attributes=colors)
     if not args.no_propulsion:
         # A single-screw layout is centred (offset 0); twin uses the default offset.
-        propulsion_params = (
-            PropulsionParameters(engine_count=1, engine_offset_y_mm=0.0)
-            if args.engine_count == 1
-            else PropulsionParameters(engine_count=2)
-        )
+        engine_count = args.engine_count
+        offset = 0.0 if engine_count == 1 else PropulsionParameters().engine_offset_y_mm
+        if args.no_propulsion_detail:
+            # spec 021 — placeholder fidelity: every detail flag off (spec 014).
+            propulsion_params = PropulsionParameters(
+                engine_count=engine_count,
+                engine_offset_y_mm=offset,
+                engine=EngineParameters(detailed=False),
+                shaft=ShaftParameters(
+                    coupling_flange=False, strut_bearing=False, shaft_log_fairing=False
+                ),
+                propeller=PropellerParameters(airfoil_blades=False),
+                rudder=RudderParameters(naca_foil=False),
+            )
+        else:
+            propulsion_params = PropulsionParameters(
+                engine_count=engine_count, engine_offset_y_mm=offset
+            )
         build_propulsion(hull, deck, parameters=propulsion_params, apply_render_attributes=colors)
 
     artifact: ExportArtifact

@@ -125,6 +125,7 @@ _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Propulsion_EngineBed", "engine"),
     ("Propulsion_Engine", "engine"),
     ("Propulsion_Shaft", "steel"),
+    ("Propulsion_Strut", "bronze"),
     ("Propulsion_Propeller", "bronze"),
     ("Propulsion_Rudder", "bronze"),
 )

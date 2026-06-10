@@ -49,6 +49,37 @@ _MM_PER_M = 1000.0
 _WATERLINE_Z_MM = 0.0
 """Design waterline is the Z=0 datum (keel below, freeboard above)."""
 
+# ---------------------------------------------------------------------------
+# Spec 021 — detail defaults (constitution I: no magic numbers in bodies).
+# Every detailed dimension is a named constant used as a dataclass default.
+# The reproducibility spike (spec 021 T001) proved all five constructions
+# byte-reproducible, so every master default is ON.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PROPELLER_NACA_T = 0.12
+_DEFAULT_PROPELLER_BLADE_SECTIONS = 5
+_DEFAULT_PROPELLER_ROOT_PITCH_DEG = 45.0
+_DEFAULT_PROPELLER_TIP_PITCH_DEG = 20.0
+_MIN_BLADE_SECTIONS = 2
+
+_DEFAULT_RUDDER_NACA_T = 0.18
+
+_DEFAULT_COUPLING_FLANGE_DIAMETER_MM = 120.0
+_DEFAULT_COUPLING_FLANGE_THICKNESS_MM = 25.0
+_DEFAULT_COUPLING_BOLT_COUNT = 6
+_DEFAULT_STRUT_COUNT = 1
+_DEFAULT_STRUT_ARM_WIDTH_MM = 40.0
+_DEFAULT_SHAFT_LOG_FAIRING_LENGTH_MM = 160.0
+_DEFAULT_SHAFT_LOG_FAIRING_DIAMETER_RATIO = 2.4
+
+_DEFAULT_ENGINE_SUMP_DROP_MM = 120.0
+_DEFAULT_ENGINE_SUMP_INSET_MM = 80.0
+_DEFAULT_ENGINE_HEAD_HEIGHT_MM = 160.0
+_DEFAULT_ENGINE_MANIFOLD_STUB_COUNT = 4
+_DEFAULT_ENGINE_MANIFOLD_STUB_DIAMETER_MM = 40.0
+_DEFAULT_FOIL_SECTION_POINTS = 24
+"""Polyline density per foil section (no arcs — spec 022 reproducibility lesson)."""
+
 __all__ = [
     "EngineBed",
     "EngineBedParameters",
@@ -64,6 +95,7 @@ __all__ = [
     "RudderParameters",
     "Shaft",
     "ShaftParameters",
+    "Strut",
     "build_propulsion",
 ]
 
@@ -153,33 +185,105 @@ class EngineBedParameters:
 
 @dataclass(frozen=True)
 class EngineParameters:
-    """Engine block dimensions + longitudinal station (mm). Frozen."""
+    """Engine block dimensions + longitudinal station (mm). Frozen.
+
+    Spec 021 adds a detailed marine-diesel silhouette (sump + head/valve-cover +
+    exhaust-manifold stubs) fused into the block; ``detailed=False`` reproduces
+    the spec 014 plain box byte-for-byte.
+    """
 
     length_mm: float = 1100.0
     width_mm: float = 600.0
     height_mm: float = 700.0
     station_x_mm: float = 3500.0
 
+    detailed: bool = True
+    sump_drop_mm: float = _DEFAULT_ENGINE_SUMP_DROP_MM
+    sump_inset_mm: float = _DEFAULT_ENGINE_SUMP_INSET_MM
+    head_height_mm: float = _DEFAULT_ENGINE_HEAD_HEIGHT_MM
+    manifold_stub_count: int = _DEFAULT_ENGINE_MANIFOLD_STUB_COUNT
+    manifold_stub_diameter_mm: float = _DEFAULT_ENGINE_MANIFOLD_STUB_DIAMETER_MM
+
     def __post_init__(self) -> None:
         _require_positive("engine.length_mm", self.length_mm)
         _require_positive("engine.width_mm", self.width_mm)
         _require_positive("engine.height_mm", self.height_mm)
         _require_non_negative("engine.station_x_mm", self.station_x_mm)
+        if self.manifold_stub_count < 0:
+            raise PropulsionParameterError(
+                "engine.manifold_stub_count", self.manifold_stub_count, ">= 0"
+            )
+        if self.detailed:
+            _require_positive("engine.sump_drop_mm", self.sump_drop_mm)
+            _require_positive("engine.sump_inset_mm", self.sump_inset_mm)
+            _require_positive("engine.head_height_mm", self.head_height_mm)
+            _require_positive("engine.manifold_stub_diameter_mm", self.manifold_stub_diameter_mm)
+            if self.sump_inset_mm * 2 >= self.width_mm:
+                raise PropulsionParameterError(
+                    "engine.sump_inset_mm",
+                    self.sump_inset_mm,
+                    f"< width_mm/2 ({self.width_mm / 2}) — sump must stay inside the block",
+                )
 
 
 @dataclass(frozen=True)
 class ShaftParameters:
-    """Propeller-shaft diameter, down-angle, and hull-exit station (mm/deg). Frozen."""
+    """Propeller-shaft diameter, down-angle, and hull-exit station (mm/deg). Frozen.
+
+    Spec 021 adds a forward coupling flange + bolt detail (fused into the shaft),
+    a separate strut/P-bracket support body, and a faired shaft-log boss at the
+    hull exit (fused into the shaft). Each is opt-out; with all three off the
+    shaft reproduces the spec 014 cylinder + stern-tube boss byte-for-byte.
+    """
 
     diameter_mm: float = 45.0
     angle_deg: float = 10.0
     exit_x_mm: float = 1800.0
+
+    coupling_flange: bool = True
+    coupling_flange_diameter_mm: float = _DEFAULT_COUPLING_FLANGE_DIAMETER_MM
+    coupling_flange_thickness_mm: float = _DEFAULT_COUPLING_FLANGE_THICKNESS_MM
+    coupling_bolt_count: int = _DEFAULT_COUPLING_BOLT_COUNT
+    strut_bearing: bool = True
+    strut_count: int = _DEFAULT_STRUT_COUNT
+    strut_arm_width_mm: float = _DEFAULT_STRUT_ARM_WIDTH_MM
+    shaft_log_fairing: bool = True
+    shaft_log_fairing_length_mm: float = _DEFAULT_SHAFT_LOG_FAIRING_LENGTH_MM
+    shaft_log_fairing_diameter_ratio: float = _DEFAULT_SHAFT_LOG_FAIRING_DIAMETER_RATIO
 
     def __post_init__(self) -> None:
         _require_positive("shaft.diameter_mm", self.diameter_mm)
         if not (0.0 <= self.angle_deg <= 30.0):
             raise PropulsionParameterError("shaft.angle_deg", self.angle_deg, "[0, 30]")
         _require_non_negative("shaft.exit_x_mm", self.exit_x_mm)
+        if self.coupling_flange:
+            _require_positive(
+                "shaft.coupling_flange_thickness_mm", self.coupling_flange_thickness_mm
+            )
+            if self.coupling_bolt_count < 0:
+                raise PropulsionParameterError(
+                    "shaft.coupling_bolt_count", self.coupling_bolt_count, ">= 0"
+                )
+            if self.coupling_flange_diameter_mm <= self.diameter_mm:
+                raise PropulsionParameterError(
+                    "shaft.coupling_flange_diameter_mm",
+                    self.coupling_flange_diameter_mm,
+                    f"> diameter_mm ({self.diameter_mm})",
+                )
+        if self.strut_bearing:
+            if self.strut_count < 1:
+                raise PropulsionParameterError("shaft.strut_count", self.strut_count, ">= 1")
+            _require_positive("shaft.strut_arm_width_mm", self.strut_arm_width_mm)
+        if self.shaft_log_fairing:
+            _require_positive(
+                "shaft.shaft_log_fairing_length_mm", self.shaft_log_fairing_length_mm
+            )
+            if self.shaft_log_fairing_diameter_ratio <= 1.0:
+                raise PropulsionParameterError(
+                    "shaft.shaft_log_fairing_diameter_ratio",
+                    self.shaft_log_fairing_diameter_ratio,
+                    "> 1.0 (fairing must be fatter than the shaft)",
+                )
 
 
 @dataclass(frozen=True)
@@ -189,6 +293,12 @@ class PropellerParameters:
     diameter_mm: float = 450.0
     hub_diameter_mm: float = 90.0
     blade_count: int = 3
+
+    airfoil_blades: bool = True
+    naca_thickness_ratio: float = _DEFAULT_PROPELLER_NACA_T
+    blade_sections: int = _DEFAULT_PROPELLER_BLADE_SECTIONS
+    root_pitch_deg: float = _DEFAULT_PROPELLER_ROOT_PITCH_DEG
+    tip_pitch_deg: float = _DEFAULT_PROPELLER_TIP_PITCH_DEG
 
     def __post_init__(self) -> None:
         _require_positive("propeller.diameter_mm", self.diameter_mm)
@@ -201,6 +311,21 @@ class PropellerParameters:
             )
         if not (2 <= self.blade_count <= 6):
             raise PropulsionParameterError("propeller.blade_count", self.blade_count, "[2, 6]")
+        if self.airfoil_blades:
+            if not (math.isfinite(self.naca_thickness_ratio) and 0.0 < self.naca_thickness_ratio < 1.0):
+                raise PropulsionParameterError(
+                    "propeller.naca_thickness_ratio", self.naca_thickness_ratio, "(0, 1)"
+                )
+            if self.blade_sections < _MIN_BLADE_SECTIONS:
+                raise PropulsionParameterError(
+                    "propeller.blade_sections", self.blade_sections, f">= {_MIN_BLADE_SECTIONS}"
+                )
+            if self.root_pitch_deg == self.tip_pitch_deg:
+                raise PropulsionParameterError(
+                    "propeller.root_pitch_deg",
+                    self.root_pitch_deg,
+                    "!= tip_pitch_deg (blade must twist root->tip)",
+                )
 
 
 @dataclass(frozen=True)
@@ -212,11 +337,20 @@ class RudderParameters:
     thickness_mm: float = 40.0
     stock_diameter_mm: float = 50.0
 
+    naca_foil: bool = True
+    naca_thickness_ratio: float = _DEFAULT_RUDDER_NACA_T
+
     def __post_init__(self) -> None:
         _require_positive("rudder.chord_mm", self.chord_mm)
         _require_positive("rudder.span_mm", self.span_mm)
         _require_positive("rudder.thickness_mm", self.thickness_mm)
         _require_positive("rudder.stock_diameter_mm", self.stock_diameter_mm)
+        if self.naca_foil and not (
+            math.isfinite(self.naca_thickness_ratio) and 0.0 < self.naca_thickness_ratio < 1.0
+        ):
+            raise PropulsionParameterError(
+                "rudder.naca_thickness_ratio", self.naca_thickness_ratio, "(0, 1)"
+            )
 
 
 @dataclass(frozen=True)
@@ -273,6 +407,70 @@ def _require_non_negative(name: str, value: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# NACA 4-digit symmetric foil math (spec 021 — pure Python, no FreeCAD).
+# ---------------------------------------------------------------------------
+
+
+def _naca_symmetric_half_thickness(x_over_c: float, thickness_ratio: float) -> float:
+    """Half-thickness of a NACA 4-digit symmetric foil, closed trailing edge.
+
+    ``x_over_c`` is the chordwise station in [0, 1]; ``thickness_ratio`` is the
+    max-thickness fraction (e.g. 0.12 → NACA 0012). The last coefficient
+    (``-0.1036``, not the open-TE ``-0.1015``) closes the trailing edge to a
+    point so the section is watertight/manifold.
+
+    Example:
+        >>> round(_naca_symmetric_half_thickness(0.0, 0.12), 6)
+        0.0
+        >>> round(_naca_symmetric_half_thickness(1.0, 0.12), 6)
+        0.0
+        >>> _naca_symmetric_half_thickness(0.3, 0.12) > 0
+        True
+    """
+    xc = max(0.0, min(1.0, x_over_c))
+    return 5.0 * thickness_ratio * (
+        0.2969 * math.sqrt(xc)
+        - 0.1260 * xc
+        - 0.3516 * xc * xc
+        + 0.2843 * xc**3
+        - 0.1036 * xc**4
+    )
+
+
+def _naca_section_polyline(
+    chord_mm: float, thickness_ratio: float, n_points: int
+) -> list[tuple[float, float]]:
+    """Closed foil outline as ordered (u=chord, v=thickness) points (mm).
+
+    Upper surface leading-edge→trailing-edge, then lower surface back, with the
+    shared LE/TE vertices dropped so the loop closes without duplicates. Built
+    from straight segments (no arcs) so a Pad/loft of it is byte-reproducible
+    (spec 022 lesson). ``n_points`` is the per-surface sample count.
+
+    Example:
+        >>> pts = _naca_section_polyline(100.0, 0.12, 12)
+        >>> len(pts) >= 12
+        True
+        >>> pts[0]  # leading edge at the origin
+        (0.0, 0.0)
+    """
+    n = max(3, n_points)
+    xs = [i / (n - 1) for i in range(n)]
+    upper = [(xc * chord_mm, _naca_symmetric_half_thickness(xc, thickness_ratio) * chord_mm)
+             for xc in xs]
+    lower = [(xc * chord_mm, -_naca_symmetric_half_thickness(xc, thickness_ratio) * chord_mm)
+             for xc in reversed(xs)]
+    return upper + lower[1:-1]
+
+
+def _rotate2d(points: list[tuple[float, float]], angle_deg: float) -> list[tuple[float, float]]:
+    """Rotate (u, v) points about the origin by ``angle_deg`` (blade twist)."""
+    a = math.radians(angle_deg)
+    c, s = math.cos(a), math.sin(a)
+    return [(u * c - v * s, u * s + v * c) for (u, v) in points]
+
+
+# ---------------------------------------------------------------------------
 # Result wrapper dataclasses (data-model §"Output wrapper dataclasses")
 # ---------------------------------------------------------------------------
 
@@ -299,6 +497,8 @@ class EngineBlock:
     within_hull_envelope: bool
     pierces_hull_shell: bool
     volume_mm3: float
+    detail_requested: bool = False
+    detail_applied: bool = False
 
 
 @dataclass
@@ -314,6 +514,8 @@ class Shaft:
     exit_z_mm: float
     has_stern_tube_boss: bool
     volume_mm3: float
+    has_coupling_flange: bool = False
+    has_shaft_log_fairing: bool = False
 
 
 @dataclass
@@ -327,6 +529,9 @@ class Propeller:
     bbox_min_z_mm: float
     blade_count: int
     volume_mm3: float
+    airfoil_requested: bool = False
+    airfoil_applied: bool = False
+    root_to_tip_twist_deg: float = 0.0
 
 
 @dataclass
@@ -338,6 +543,20 @@ class Rudder:
     is_port: bool
     x_mm: float
     bbox_min_z_mm: float
+    volume_mm3: float
+    naca_requested: bool = False
+    naca_applied: bool = False
+
+
+@dataclass
+class Strut:
+    """One strut / P-bracket support body (spec 021; separate top-level body)."""
+
+    body: Any
+    parameters: ShaftParameters
+    is_port: bool
+    top_z_mm: float
+    bottom_z_mm: float
     volume_mm3: float
 
 
@@ -353,6 +572,7 @@ class Propulsion:
     propellers: list[Propeller]
     rudders: list[Rudder]
     hull_modified: bool
+    struts: list[Strut] = field(default_factory=list)
     build_duration_seconds: float = field(default=0.0)
 
 
@@ -494,6 +714,7 @@ def _pd_circle_pad(
     added: list[Any],
     *,
     midplane: bool = False,
+    reversed_: bool = False,
 ) -> Any:
     """Sketch a circle (in datum-local u/v) and Pad it along the datum normal."""
     import FreeCAD
@@ -510,8 +731,46 @@ def _pd_circle_pad(
     pad.Profile = (sketch, [""])
     pad.Length = length
     pad.Midplane = midplane
-    pad.Reversed = False
+    pad.Reversed = reversed_
     return pad
+
+
+def _body_is_manifold(body: Any) -> bool:
+    """True iff the body's shape is a single closed valid solid (FR-007)."""
+    shape = body.Shape
+    return len(shape.Solids) == 1 and shape.isValid()
+
+
+def _pd_datum_at_placement(body: Any, name: str, placement: Any, added: list[Any]) -> Any:
+    """PartDesign datum plane positioned by an explicit placement (no attachment).
+
+    Used for the radially-stacked propeller-blade foil sections, whose planes are
+    neither XY- nor YZ-parallel. Local u/v of a sketch on this datum map to the
+    placement's local X/Y axes; the normal is the local Z axis.
+    """
+    datum = body.newObject("PartDesign::Plane", name)
+    added.append(datum)
+    datum.MapMode = "Deactivated"
+    datum.Placement = placement
+    return datum
+
+
+def _pd_polyline_pad(
+    body: Any,
+    datum: Any,
+    name: str,
+    points_uv: list[tuple[float, float]],
+    length: float,
+    added: list[Any],
+    *,
+    midplane: bool = False,
+    reversed_: bool = False,
+) -> Any:
+    """Sketch a closed polyline through ``points_uv`` and Pad it (alias of the
+    rectangle pad, kept named for foil-section intent)."""
+    return _pd_rect_pad(
+        body, datum, name, points_uv, length, added, midplane=midplane, reversed_=reversed_
+    )
 
 
 def _shaft_axis_placement(coupling_x: float, offset_y: float, coupling_z: float, angle_deg: float) -> Any:
@@ -601,7 +860,7 @@ def _build_engine(
     added.append(body)
     target_doc.recompute()
     datum = _pd_datum_xy(body, "EngineDatum", bottom_z, added)
-    _pd_rect_pad(
+    block_pad = _pd_rect_pad(
         body,
         datum,
         "Engine",
@@ -611,7 +870,20 @@ def _build_engine(
     )
     target_doc.recompute()
 
-    within = (top_z <= ceiling) and (abs(offset_y) + ep.width_mm / 2.0 <= half_beam)
+    # Detailed top Z accounts for the head/valve-cover (FR-005, envelope re-check).
+    detailed_top_z = top_z + (ep.head_height_mm if ep.detailed else 0.0)
+    detail_applied = False
+    if ep.detailed:
+        detail_applied = _add_engine_detail(
+            body, ep, target_doc, added, block_pad,
+            aft_x=aft_x, fwd_x=fwd_x, y0=y0, y1=y1, bottom_z=bottom_z, top_z=top_z,
+            offset_y=offset_y,
+        )
+
+    effective_top_z = detailed_top_z if detail_applied else top_z
+    within = (effective_top_z <= ceiling) and (
+        abs(offset_y) + ep.width_mm / 2.0 <= half_beam
+    )
     shape = body.Shape
     return EngineBlock(
         body=body,
@@ -621,7 +893,86 @@ def _build_engine(
         within_hull_envelope=within,
         pierces_hull_shell=not within,
         volume_mm3=float(shape.Volume),
+        detail_requested=ep.detailed,
+        detail_applied=detail_applied,
     )
+
+
+def _add_engine_detail(
+    body: Any,
+    ep: EngineParameters,
+    target_doc: Any,
+    added: list[Any],
+    block_pad: Any,
+    *,
+    aft_x: float,
+    fwd_x: float,
+    y0: float,
+    y1: float,
+    bottom_z: float,
+    top_z: float,
+    offset_y: float,
+) -> bool:
+    """Fuse sump + head/valve-cover + manifold stubs into the engine block.
+
+    Returns True if the detailed body is a single valid solid; on any failure the
+    detail features are removed, the body Tip is restored to the plain block, and
+    False is returned (manifold-or-fallback gate, FR-010, core part).
+    """
+    import FreeCAD
+
+    detail_objs: list[Any] = []
+    try:
+        inset = ep.sump_inset_mm
+        # Sump: narrower box hanging below the block (stays above the keel).
+        sump_datum = _pd_datum_xy(body, "SumpDatum", bottom_z - ep.sump_drop_mm, detail_objs)
+        _pd_rect_pad(
+            body, sump_datum, "Sump",
+            [(aft_x + inset, y0 + inset), (fwd_x - inset, y0 + inset),
+             (fwd_x - inset, y1 - inset), (aft_x + inset, y1 - inset)],
+            ep.sump_drop_mm, detail_objs,
+        )
+        # Head / valve cover: narrower raised box on top of the block.
+        hx, hy = (fwd_x - aft_x) * 0.33, (y1 - y0) * 0.25
+        cx, cy = (aft_x + fwd_x) / 2.0, offset_y
+        head_datum = _pd_datum_xy(body, "HeadDatum", top_z, detail_objs)
+        _pd_rect_pad(
+            body, head_datum, "Head",
+            [(cx - hx, cy - hy), (cx + hx, cy - hy), (cx + hx, cy + hy), (cx - hx, cy + hy)],
+            ep.head_height_mm, detail_objs,
+        )
+        # Exhaust-manifold stubs: AdditiveCylinders protruding from the OUTBOARD
+        # face (axis ±Y by the train's side) so twin engines mirror about Y.
+        stub_r = ep.manifold_stub_diameter_mm / 2.0
+        mid_z = bottom_z + (top_z - bottom_z) * 0.5
+        overlap = stub_r
+        outboard_plus_y = offset_y >= 0.0
+        face_y = y1 if outboard_plus_y else y0
+        sign = 1.0 if outboard_plus_y else -1.0
+        stub_rot = FreeCAD.Rotation(FreeCAD.Vector(1.0, 0.0, 0.0), -90.0 * sign)
+        for k in range(ep.manifold_stub_count):
+            x_k = aft_x + (fwd_x - aft_x) * (k + 1) / (ep.manifold_stub_count + 1)
+            cyl = body.newObject("PartDesign::AdditiveCylinder", f"Stub{k}")
+            detail_objs.append(cyl)
+            cyl.Radius = stub_r
+            cyl.Height = ep.manifold_stub_diameter_mm * 1.2
+            cyl.Placement = FreeCAD.Placement(
+                FreeCAD.Vector(x_k, face_y - sign * overlap, mid_z), stub_rot
+            )
+        target_doc.recompute()
+        if _body_is_manifold(body):
+            added.extend(detail_objs)
+            return True
+    except BaseException:
+        pass
+    # Fallback: strip the detail features, restore the plain-block Tip.
+    for obj in reversed(detail_objs):
+        with contextlib.suppress(BaseException):
+            target_doc.removeObject(obj.Name)
+    with contextlib.suppress(BaseException):
+        body.Tip = block_pad
+        target_doc.recompute()
+    return False
 
 
 def _build_shaft(
@@ -657,6 +1008,17 @@ def _build_shaft(
     _pd_circle_pad(body, boss_datum, "Boss", 0.0, 0.0, radius * 1.8, boss_len, added)
     target_doc.recompute()
 
+    # Coupling flange + bolt detail at the forward (engine/gearbox) end, fused
+    # into the shaft (core detail: manifold-or-fallback strips it on failure).
+    has_coupling = sp.coupling_flange and _add_coupling_flange(
+        body, sp, target_doc, added, radius=radius
+    )
+    # Faired shaft-log boss at the hull-exit (aft) end, fused (optional detail:
+    # omitted on failure).
+    has_fairing = sp.shaft_log_fairing and _add_shaft_log_fairing(
+        body, sp, target_doc, added, radius=radius, slant=slant
+    )
+
     body.Placement = _shaft_axis_placement(engine_x, offset_y, coupling_z, sp.angle_deg)
     target_doc.recompute()
 
@@ -671,7 +1033,77 @@ def _build_shaft(
         exit_z_mm=exit_z,
         has_stern_tube_boss=True,
         volume_mm3=float(shape.Volume),
+        has_coupling_flange=has_coupling,
+        has_shaft_log_fairing=has_fairing,
     )
+
+
+def _add_coupling_flange(
+    body: Any, sp: ShaftParameters, target_doc: Any, added: list[Any], *, radius: float
+) -> bool:
+    """Fuse a coaxial coupling collar + a ring of bolt-head bosses at local x=0."""
+    detail_objs: list[Any] = []
+    safe_tip = body.Tip
+    try:
+        flange_r = sp.coupling_flange_diameter_mm / 2.0
+        # Collar disc: x=[0, thickness], overlapping the shaft start.
+        collar_datum = _pd_datum_yz(body, "FlangeDatum", 0.0, 0.0, detail_objs)
+        _pd_circle_pad(
+            body, collar_datum, "Flange", 0.0, 0.0, flange_r, sp.coupling_flange_thickness_mm,
+            detail_objs,
+        )
+        # Bolt-head bosses on the forward face (x=0 plane), padded -X (reversed).
+        if sp.coupling_bolt_count > 0:
+            bolt_r = min(flange_r * 0.12, (flange_r - radius) * 0.4)
+            ring_r = (radius + flange_r) / 2.0
+            bolt_datum = _pd_datum_yz(body, "BoltDatum", 0.0, 0.0, detail_objs)
+            for k in range(sp.coupling_bolt_count):
+                a = 2.0 * math.pi * k / sp.coupling_bolt_count
+                _pd_circle_pad(
+                    body, bolt_datum, f"Bolt{k}",
+                    ring_r * math.cos(a), ring_r * math.sin(a), bolt_r,
+                    sp.coupling_flange_thickness_mm * 0.5, detail_objs, reversed_=True,
+                )
+        target_doc.recompute()
+        if _body_is_manifold(body):
+            added.extend(detail_objs)
+            return True
+    except BaseException:
+        pass
+    for obj in reversed(detail_objs):
+        with contextlib.suppress(BaseException):
+            target_doc.removeObject(obj.Name)
+    with contextlib.suppress(BaseException):
+        body.Tip = safe_tip
+        target_doc.recompute()
+    return False
+
+
+def _add_shaft_log_fairing(
+    body: Any, sp: ShaftParameters, target_doc: Any, added: list[Any], *,
+    radius: float, slant: float,
+) -> bool:
+    """Fuse a faired coaxial boss enveloping the shaft-exit (aft) end."""
+    detail_objs: list[Any] = []
+    safe_tip = body.Tip
+    try:
+        fair_len = min(sp.shaft_log_fairing_length_mm, slant * 0.5)
+        fair_r = radius * sp.shaft_log_fairing_diameter_ratio
+        fair_datum = _pd_datum_yz(body, "FairingDatum", slant - fair_len, 0.0, detail_objs)
+        _pd_circle_pad(body, fair_datum, "Fairing", 0.0, 0.0, fair_r, fair_len, detail_objs)
+        target_doc.recompute()
+        if _body_is_manifold(body):
+            added.extend(detail_objs)
+            return True
+    except BaseException:
+        pass
+    for obj in reversed(detail_objs):
+        with contextlib.suppress(BaseException):
+            target_doc.removeObject(obj.Name)
+    with contextlib.suppress(BaseException):
+        body.Tip = safe_tip
+        target_doc.recompute()
+    return False
 
 
 def _blade_corners(
@@ -719,18 +1151,20 @@ def _build_propeller(
 
     hub_datum = _pd_datum_yz(body, "PropHubDatum", 0.0, 0.0, added)
     _pd_circle_pad(body, hub_datum, "PropHub", 0.0, 0.0, hub_r, hub_len, added, midplane=True)
-    blade_datum = _pd_datum_yz(body, "PropBladeDatum", 0.0, 0.0, added)
-    for i in range(pp.blade_count):
-        a = (2.0 * math.pi * i) / pp.blade_count
-        corners = _blade_corners(a, hub_r * 0.8, prop_r, blade_half_w)
-        _pd_rect_pad(
-            body,
-            blade_datum,
-            f"PropBlade{i}",
-            corners,
-            blade_thickness,
-            added,
-            midplane=True,
+
+    twist_deg = 0.0
+    airfoil_applied = False
+    if pp.airfoil_blades:
+        airfoil_applied = _add_foil_blades(
+            body, pp, target_doc, added, hub_r=hub_r, prop_r=prop_r
+        )
+        if airfoil_applied:
+            twist_deg = pp.root_pitch_deg - pp.tip_pitch_deg
+    if not airfoil_applied:
+        _add_flat_blades(
+            body, pp, target_doc, added,
+            hub_r=hub_r, prop_r=prop_r,
+            blade_thickness=blade_thickness, blade_half_w=blade_half_w,
         )
     target_doc.recompute()
 
@@ -746,7 +1180,119 @@ def _build_propeller(
         bbox_min_z_mm=float(shape.BoundBox.ZMin),
         blade_count=pp.blade_count,
         volume_mm3=float(shape.Volume),
+        airfoil_requested=pp.airfoil_blades,
+        airfoil_applied=airfoil_applied,
+        root_to_tip_twist_deg=twist_deg,
     )
+
+
+def _add_flat_blades(
+    body: Any, pp: PropellerParameters, target_doc: Any, added: list[Any], *,
+    hub_r: float, prop_r: float, blade_thickness: float, blade_half_w: float,
+) -> None:
+    """Spec 014 flat radial blades (placeholder + airfoil fallback)."""
+    blade_datum = _pd_datum_yz(body, "PropBladeDatum", 0.0, 0.0, added)
+    for i in range(pp.blade_count):
+        a = (2.0 * math.pi * i) / pp.blade_count
+        corners = _blade_corners(a, hub_r * 0.8, prop_r, blade_half_w)
+        _pd_rect_pad(body, blade_datum, f"PropBlade{i}", corners, blade_thickness, added, midplane=True)
+
+
+def _foil_section_sketch(
+    body: Any, name: str, points_uv: list[tuple[float, float]], placement: Any, added: list[Any]
+) -> Any:
+    """A free (Placement-positioned) sketch of a closed foil polyline, for lofting."""
+    import Part
+    import Sketcher
+
+    sk = body.newObject("Sketcher::SketchObject", name)
+    added.append(sk)
+    sk.MapMode = "Deactivated"
+    sk.Placement = placement
+    vs = [_vec(u, v, 0.0) for (u, v) in points_uv]
+    ids = [
+        sk.addGeometry(Part.LineSegment(vs[i], vs[(i + 1) % len(vs)]), False)
+        for i in range(len(vs))
+    ]
+    for i in range(len(ids)):
+        sk.addConstraint(
+            Sketcher.Constraint("Coincident", ids[i], 2, ids[(i + 1) % len(ids)], 1)
+        )
+    return sk
+
+
+def _vec(x: float, y: float, z: float) -> Any:
+    import FreeCAD
+
+    return FreeCAD.Vector(x, y, z)
+
+
+def _add_foil_blades(
+    body: Any, pp: PropellerParameters, target_doc: Any, added: list[Any], *,
+    hub_r: float, prop_r: float,
+) -> bool:
+    """Loft symmetric-NACA foil sections per blade, twisted root→tip; fuse with hub.
+
+    Each blade is a ``PartDesign::AdditiveLoft (Ruled=True)`` through
+    ``blade_sections`` polyline foil sketches placed on parallel planes along the
+    blade's radial axis (normal r_hat), scaled by chord taper and rotated by the
+    pitch law. Manifold-or-fallback: on failure the foil features are stripped and
+    False is returned so the caller builds the spec 014 flat blade.
+    """
+    import FreeCAD
+
+    detail_objs: list[Any] = []
+    safe_tip = body.Tip
+    try:
+        n_sec = pp.blade_sections
+        inner_r = hub_r * 0.8
+        for i in range(pp.blade_count):
+            a = (2.0 * math.pi * i) / pp.blade_count
+            ca, sa = math.cos(a), math.sin(a)
+            r_hat = (0.0, ca, sa)          # radial (in the YZ disc plane)
+            t_hat = (0.0, -sa, ca)         # tangential (chord / sketch-u)
+            x_hat = (1.0, 0.0, 0.0)        # axial fore-aft (thickness / sketch-v)
+            section_sketches: list[Any] = []
+            for j in range(n_sec):
+                f = j / (n_sec - 1)
+                r = inner_r + (prop_r - inner_r) * f
+                chord = pp.diameter_mm * 0.20 * (1.0 - 0.5 * f)  # leaf-shaped taper
+                pts = _naca_section_polyline(
+                    chord, pp.naca_thickness_ratio, _DEFAULT_FOIL_SECTION_POINTS
+                )
+                pts = [(u - chord / 2.0, v) for (u, v) in pts]   # centre on chord-mid
+                pitch = pp.root_pitch_deg * (1.0 - f) + pp.tip_pitch_deg * f
+                pts = _rotate2d(pts, pitch)
+                ox, oy, oz = (r * r_hat[0], r * r_hat[1], r * r_hat[2])
+                # Frame: sketch-X→t_hat, sketch-Y→x_hat, normal→r_hat, origin r·r_hat.
+                m = FreeCAD.Matrix(
+                    t_hat[0], x_hat[0], r_hat[0], ox,
+                    t_hat[1], x_hat[1], r_hat[1], oy,
+                    t_hat[2], x_hat[2], r_hat[2], oz,
+                    0.0, 0.0, 0.0, 1.0,
+                )
+                placement = FreeCAD.Placement(m)
+                section_sketches.append(
+                    _foil_section_sketch(body, f"Blade{i}Sec{j}", pts, placement, detail_objs)
+                )
+            loft = body.newObject("PartDesign::AdditiveLoft", f"Blade{i}Loft")
+            detail_objs.append(loft)
+            loft.Profile = (section_sketches[0], [""])
+            loft.Sections = [(s, [""]) for s in section_sketches[1:]]
+            loft.Ruled = True
+            target_doc.recompute()
+        if _body_is_manifold(body):
+            added.extend(detail_objs)
+            return True
+    except BaseException:
+        pass
+    for obj in reversed(detail_objs):
+        with contextlib.suppress(BaseException):
+            target_doc.removeObject(obj.Name)
+    with contextlib.suppress(BaseException):
+        body.Tip = safe_tip
+        target_doc.recompute()
+    return False
 
 
 def _build_rudder(
@@ -773,18 +1319,24 @@ def _build_rudder(
     added.append(body)
     target_doc.recompute()
 
-    # Blade: a chord(X) x thickness(Y) column extruded up by span from the
-    # bottom datum (XY datum, normal +Z). Representative flat foil plate.
-    blade_datum = _pd_datum_xy(body, "RudderBladeDatum", bottom_z, added)
-    y0, y1 = offset_y - rp.thickness_mm / 2.0, offset_y + rp.thickness_mm / 2.0
-    _pd_rect_pad(
-        body,
-        blade_datum,
-        "RudderBlade",
-        [(aft_x, y0), (fwd_x, y0), (fwd_x, y1), (aft_x, y1)],
-        rp.span_mm,
-        added,
-    )
+    # Blade: a symmetric NACA foil section (chord X, thickness Y) extruded up by
+    # span from the bottom XY datum. naca_foil=False → spec 014 flat plate.
+    naca_applied = False
+    if rp.naca_foil:
+        naca_applied = _add_rudder_foil_blade(
+            body, rp, target_doc, added, aft_x=aft_x, offset_y=offset_y, bottom_z=bottom_z
+        )
+    if not naca_applied:
+        blade_datum = _pd_datum_xy(body, "RudderBladeDatum", bottom_z, added)
+        y0, y1 = offset_y - rp.thickness_mm / 2.0, offset_y + rp.thickness_mm / 2.0
+        _pd_rect_pad(
+            body,
+            blade_datum,
+            "RudderBlade",
+            [(aft_x, y0), (fwd_x, y0), (fwd_x, y1), (aft_x, y1)],
+            rp.span_mm,
+            added,
+        )
     # Stock: vertical cylinder near the leading edge, overlapping the blade and
     # extending up into the hull underbody (so the two fuse into one solid).
     stock_datum = _pd_datum_xy(body, "RudderStockDatum", bottom_z, added)
@@ -809,7 +1361,127 @@ def _build_rudder(
         x_mm=center_x,
         bbox_min_z_mm=float(shape.BoundBox.ZMin),
         volume_mm3=float(shape.Volume),
+        naca_requested=rp.naca_foil,
+        naca_applied=naca_applied,
     )
+
+
+def _add_rudder_foil_blade(
+    body: Any, rp: RudderParameters, target_doc: Any, added: list[Any], *,
+    aft_x: float, offset_y: float, bottom_z: float,
+) -> bool:
+    """Pad a symmetric NACA foil section over the rudder span (chord X, thick Y).
+
+    Manifold-or-fallback: on failure the foil feature is stripped and False is
+    returned so the caller builds the spec 014 flat plate.
+    """
+    detail_objs: list[Any] = []
+    safe_tip = body.Tip
+    try:
+        pts = _naca_section_polyline(
+            rp.chord_mm, rp.naca_thickness_ratio, _DEFAULT_FOIL_SECTION_POINTS
+        )
+        # u → X (chord from the aft/leading reference), v → Y (thickness about offset).
+        corners = [(aft_x + u, offset_y + v) for (u, v) in pts]
+        blade_datum = _pd_datum_xy(body, "RudderFoilDatum", bottom_z, detail_objs)
+        _pd_polyline_pad(body, blade_datum, "RudderFoil", corners, rp.span_mm, detail_objs)
+        target_doc.recompute()
+        if _body_is_manifold(body):
+            added.extend(detail_objs)
+            return True
+    except BaseException:
+        pass
+    for obj in reversed(detail_objs):
+        with contextlib.suppress(BaseException):
+            target_doc.removeObject(obj.Name)
+    with contextlib.suppress(BaseException):
+        body.Tip = safe_tip
+        target_doc.recompute()
+    return False
+
+
+def _build_strut(
+    hull: Hull,
+    params: PropulsionParameters,
+    shaft: Shaft,
+    propeller: Propeller,
+    target_doc: Any,
+    added: list[Any],
+    *,
+    is_port: bool,
+    offset_y: float,
+    index: int,
+) -> Strut | None:
+    """Build one strut / P-bracket support body for the exposed shaft run.
+
+    A bearing barrel (coaxial with the tilted shaft) fused with a vertical arm
+    reaching up to the hull bottom. Separate `PartDesign::Body`. Optional support
+    (clarify Q4): returns None (omitted) if the body is not a single valid solid.
+    """
+    import FreeCAD
+
+    sp = params.shaft
+    angle = math.radians(sp.angle_deg)
+    exit_x = shaft.exit_x_mm
+    exit_z = shaft.exit_z_mm
+    hub_x = propeller.hub_x_mm
+    n = max(1, sp.strut_count)
+    frac = (index + 1) / (n + 1)
+    sx = exit_x + (hub_x - exit_x) * frac
+    sz = exit_z - (exit_x - sx) * math.tan(angle)
+    radius = sp.diameter_mm / 2.0
+    barrel_r = radius * 1.6
+    aft_dir = FreeCAD.Vector(-math.cos(angle), 0.0, -math.sin(angle))
+    hull_bottom = _hull_bottom_z_at(hull, sx)
+    top_z = hull_bottom if hull_bottom > sz + 50.0 else sz + 200.0
+
+    body = target_doc.addObject("PartDesign::Body", "Propulsion_Strut")
+    added.append(body)
+    target_doc.recompute()
+    sub: list[Any] = []
+    try:
+        # Bearing barrel: AdditiveCylinder centred on the shaft point, axis = shaft.
+        barrel_h = sp.diameter_mm * 1.8
+        cyl = body.newObject("PartDesign::AdditiveCylinder", "StrutBarrel")
+        sub.append(cyl)
+        cyl.Radius = barrel_r
+        cyl.Height = barrel_h
+        base = FreeCAD.Vector(sx, offset_y, sz) - aft_dir.multiply(barrel_h / 2.0)
+        cyl.Placement = FreeCAD.Placement(
+            base, FreeCAD.Rotation(FreeCAD.Vector(0.0, 0.0, 1.0), aft_dir)
+        )
+        target_doc.recompute()
+        # Arm: vertical box from below the barrel centre up to the hull bottom.
+        aw = sp.strut_arm_width_mm
+        ax = aw  # fore-aft footprint of the arm
+        arm_bottom = sz - barrel_r
+        arm_datum = _pd_datum_xy(body, "StrutArmDatum", arm_bottom, sub)
+        _pd_rect_pad(
+            body, arm_datum, "StrutArm",
+            [(sx - ax / 2.0, offset_y - aw / 2.0), (sx + ax / 2.0, offset_y - aw / 2.0),
+             (sx + ax / 2.0, offset_y + aw / 2.0), (sx - ax / 2.0, offset_y + aw / 2.0)],
+            top_z - arm_bottom, sub,
+        )
+        target_doc.recompute()
+        if _body_is_manifold(body):
+            shape = body.Shape
+            return Strut(
+                body=body,
+                parameters=sp,
+                is_port=is_port,
+                top_z_mm=float(shape.BoundBox.ZMax),
+                bottom_z_mm=float(shape.BoundBox.ZMin),
+                volume_mm3=float(shape.Volume),
+            )
+    except BaseException:
+        pass
+    # Omit on failure: discard the whole strut body.
+    for obj in reversed([*sub, body]):
+        with contextlib.suppress(BaseException):
+            if obj in added:
+                added.remove(obj)
+            target_doc.removeObject(obj.Name)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +1597,7 @@ def build_propulsion(
         shafts: list[Shaft] = []
         propellers: list[Propeller] = []
         rudders: list[Rudder] = []
+        struts: list[Strut] = []
 
         for is_port, offset_y in _resolve_trains(resolved):
             bed = _build_engine_bed(
@@ -943,6 +1616,14 @@ def build_propulsion(
                 resolved, shaft, target_doc, added, is_port=is_port, offset_y=offset_y
             )
             propellers.append(propeller)
+            if resolved.shaft.strut_bearing:
+                for k in range(max(1, resolved.shaft.strut_count)):
+                    strut = _build_strut(
+                        hull, resolved, shaft, propeller, target_doc, added,
+                        is_port=is_port, offset_y=offset_y, index=k,
+                    )
+                    if strut is not None:
+                        struts.append(strut)
 
         rudder_count = resolved.rudder_count if resolved.rudder_count is not None else 1
         if rudder_count == len(propellers):
@@ -973,7 +1654,7 @@ def build_propulsion(
             )
 
         target_doc.recompute()
-        _assert_manifold([*beds, *engines, *shafts, *propellers, *rudders])
+        _assert_manifold([*beds, *engines, *shafts, *propellers, *rudders, *struts])
     except PropulsionParameterError:
         _rollback(target_doc, added)
         raise
@@ -999,6 +1680,7 @@ def build_propulsion(
         *(s.body for s in shafts),
         *(p.body for p in propellers),
         *(r.body for r in rudders),
+        *(s.body for s in struts),
     ]
     _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
@@ -1012,6 +1694,7 @@ def build_propulsion(
         propellers=propellers,
         rudders=rudders,
         hull_modified=False,
+        struts=struts,
         build_duration_seconds=duration,
     )
 

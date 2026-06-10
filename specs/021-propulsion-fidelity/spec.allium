@@ -1,0 +1,786 @@
+-- allium: 3
+--
+-- Spec 021 — propulsion-fidelity
+--
+-- Promotes the spec 014 propulsion bodies from representative placeholders to
+-- CAD-faithful machinery: symmetric-NACA-foil propeller blades with radial
+-- pitch/twist, a NACA-foil rudder, a shaft coupling flange + a separate strut /
+-- P-bracket bearing, a detailed marine-diesel engine block (sump + head/valve
+-- cover + exhaust-manifold stubs), and an additive faired shaft-log around the
+-- hull exit. Every detail is ADDITIVE — the hull is never booleaned. Each
+-- detailed construction is byte-reproducible (spike-proven) and guarded by a
+-- manifold-or-fallback gate: a failing CORE part (propeller/rudder/engine)
+-- falls back to its spec 014 placeholder; a failing OPTIONAL support body
+-- (strut/fairing) is omitted. With every detail flag off, output is
+-- byte-identical to the spec 014 build. Reuses the spec 014 build_propulsion
+-- entry point, train resolution, validation idiom, rollback, and manifold guard.
+
+config {
+    max_reference_deviation_pct: Decimal = 1.0
+    waterline_z_mm: Decimal = 0.0
+
+    -- Detail master defaults — ON by default (clarify Q1), each gated.
+    default_airfoil_blades: Boolean = true
+    default_naca_rudder_foil: Boolean = true
+    default_coupling_flange: Boolean = true
+    default_strut_bearing: Boolean = true
+    default_shaft_log_fairing: Boolean = true
+    default_engine_detailed: Boolean = true
+
+    -- Foil section defaults — symmetric NACA 4-digit (clarify Q2).
+    default_propeller_naca_thickness_ratio: Decimal = 0.12
+    default_propeller_blade_sections: Integer = 5
+    default_propeller_root_pitch_deg: Decimal = 45.0
+    default_propeller_tip_pitch_deg: Decimal = 20.0
+    min_blade_sections: Integer = 2
+
+    default_rudder_naca_thickness_ratio: Decimal = 0.18
+
+    -- Coupling flange + strut + fairing defaults (mm).
+    default_coupling_flange_diameter_mm: Decimal = 120.0
+    default_coupling_flange_thickness_mm: Decimal = 25.0
+    default_coupling_bolt_count: Integer = 6
+    default_strut_count: Integer = 1
+    default_strut_arm_width_mm: Decimal = 40.0
+    default_shaft_log_fairing_length_mm: Decimal = 160.0
+    default_shaft_log_fairing_diameter_ratio: Decimal = 2.4
+
+    -- Detailed diesel engine defaults (mm).
+    default_engine_sump_drop_mm: Decimal = 120.0
+    default_engine_sump_inset_mm: Decimal = 80.0
+    default_engine_head_height_mm: Decimal = 160.0
+    default_engine_manifold_stub_count: Integer = 4
+    default_engine_manifold_stub_diameter_mm: Decimal = 40.0
+}
+
+-- External entities — produced by earlier specs, consumed here.
+-- Coordinate convention: bow = XMax, stern = XMin, waterline = Z=0,
+-- port = +Y / starboard = -Y, all millimetres.
+
+external entity HullBody {
+    loa_mm: Decimal
+    beam_max_mm: Decimal
+    draft_mm: Decimal
+    keel_z_min_mm: Decimal
+    shape_volume_mm3: Decimal
+}
+
+external entity DeckPlate {
+    top_z_amidships_mm: Decimal
+}
+
+-- Value types — extend the spec 014 parameter sets with detail toggles and
+-- detail dimensions. Lengths mm, angles deg, thickness ratios dimensionless.
+
+value EngineParameters {
+    length_mm: Decimal
+    width_mm: Decimal
+    height_mm: Decimal
+    station_x_mm: Decimal
+
+    detailed: Boolean
+    sump_drop_mm: Decimal
+    sump_inset_mm: Decimal
+    head_height_mm: Decimal
+    manifold_stub_count: Integer
+    manifold_stub_diameter_mm: Decimal
+
+    invariant PositiveDimensions {
+        this.length_mm > 0
+        this.width_mm > 0
+        this.height_mm > 0
+    }
+
+    invariant NonNegativeStation {
+        this.station_x_mm >= 0
+    }
+
+    invariant DetailDimensionsPositive {
+        this.detailed implies this.sump_drop_mm > 0
+        this.detailed implies this.head_height_mm > 0
+        this.detailed implies this.manifold_stub_diameter_mm > 0
+    }
+
+    invariant SumpInsetLeavesBlock {
+        -- Sump narrower than the block on each side, but not collapsed.
+        this.detailed implies this.sump_inset_mm * 2 < this.width_mm
+    }
+
+    invariant ManifoldStubCountNonNegative {
+        this.manifold_stub_count >= 0
+    }
+}
+
+value ShaftParameters {
+    diameter_mm: Decimal
+    angle_deg: Decimal
+    exit_x_mm: Decimal
+
+    coupling_flange: Boolean
+    coupling_flange_diameter_mm: Decimal
+    coupling_flange_thickness_mm: Decimal
+    coupling_bolt_count: Integer
+
+    strut_bearing: Boolean
+    strut_count: Integer
+    strut_arm_width_mm: Decimal
+
+    shaft_log_fairing: Boolean
+    shaft_log_fairing_length_mm: Decimal
+    shaft_log_fairing_diameter_ratio: Decimal
+
+    invariant PositiveDiameter {
+        this.diameter_mm > 0
+    }
+
+    invariant AngleBounded {
+        this.angle_deg >= 0.0
+        this.angle_deg <= 30.0
+    }
+
+    invariant NonNegativeExitStation {
+        this.exit_x_mm >= 0
+    }
+
+    invariant CouplingFlangeLargerThanShaft {
+        this.coupling_flange implies this.coupling_flange_diameter_mm > this.diameter_mm
+    }
+
+    invariant CouplingFlangePositive {
+        this.coupling_flange implies this.coupling_flange_thickness_mm > 0
+        this.coupling_flange implies this.coupling_bolt_count >= 0
+    }
+
+    invariant StrutPositive {
+        this.strut_bearing implies this.strut_count >= 1
+        this.strut_bearing implies this.strut_arm_width_mm > 0
+    }
+
+    invariant FairingLargerThanShaft {
+        this.shaft_log_fairing implies this.shaft_log_fairing_diameter_ratio > 1.0
+        this.shaft_log_fairing implies this.shaft_log_fairing_length_mm > 0
+    }
+}
+
+value PropellerParameters {
+    diameter_mm: Decimal
+    hub_diameter_mm: Decimal
+    blade_count: Integer
+
+    airfoil_blades: Boolean
+    naca_thickness_ratio: Decimal
+    blade_sections: Integer
+    root_pitch_deg: Decimal
+    tip_pitch_deg: Decimal
+
+    invariant PositiveDimensions {
+        this.diameter_mm > 0
+        this.hub_diameter_mm > 0
+    }
+
+    invariant HubSmallerThanDisc {
+        this.hub_diameter_mm < this.diameter_mm
+    }
+
+    invariant SensibleBladeCount {
+        this.blade_count >= 2
+        this.blade_count <= 6
+    }
+
+    invariant FoilThicknessRatioBounded {
+        this.airfoil_blades implies this.naca_thickness_ratio > 0.0
+        this.airfoil_blades implies this.naca_thickness_ratio < 1.0
+    }
+
+    invariant EnoughSectionsToLoft {
+        -- A loft needs at least two stacked sections; denser reads smoother.
+        this.airfoil_blades implies this.blade_sections >= 2
+    }
+
+    invariant NonZeroTwist {
+        -- Root and tip pitch differ so the blade twists (clarify Q2).
+        this.airfoil_blades implies this.root_pitch_deg != this.tip_pitch_deg
+    }
+}
+
+value RudderParameters {
+    chord_mm: Decimal
+    span_mm: Decimal
+    thickness_mm: Decimal
+    stock_diameter_mm: Decimal
+
+    naca_foil: Boolean
+    naca_thickness_ratio: Decimal
+
+    invariant PositiveDimensions {
+        this.chord_mm > 0
+        this.span_mm > 0
+        this.thickness_mm > 0
+        this.stock_diameter_mm > 0
+    }
+
+    invariant FoilThicknessRatioBounded {
+        this.naca_foil implies this.naca_thickness_ratio > 0.0
+        this.naca_foil implies this.naca_thickness_ratio < 1.0
+    }
+}
+
+value PropulsionParameters {
+    engine_count: Integer
+    engine_offset_y_mm: Decimal
+    rudder_count: Integer
+    engine: EngineParameters
+    shaft: ShaftParameters
+    propeller: PropellerParameters
+    rudder: RudderParameters
+
+    invariant EngineCountSupported {
+        this.engine_count >= 1
+        this.engine_count <= 2
+    }
+
+    invariant RudderCountSupported {
+        this.rudder_count >= 1
+        this.rudder_count <= 2
+    }
+
+    invariant SingleScrewIsCentred {
+        this.engine_count = 1 implies this.engine_offset_y_mm = 0.0
+    }
+
+    invariant TwinScrewIsOffset {
+        this.engine_count = 2 implies this.engine_offset_y_mm > 0.0
+    }
+
+    invariant ShaftExitForwardOfEngineStation {
+        this.shaft.exit_x_mm < this.engine.station_x_mm
+    }
+}
+
+-- Output entities — every body still carries the spec 014 manifold-validity
+-- flags. New fields record which detailed construction was actually applied
+-- (false => the manifold-or-fallback gate fell back to the placeholder).
+
+entity EngineBlockBody {
+    parameters: EngineParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    rests_on_bed: Boolean
+    within_hull_envelope: Boolean
+    pierces_hull_shell: Boolean
+    detail_requested: Boolean
+    detail_applied: Boolean
+    has_sump: Boolean when detail_applied = true
+    has_head: Boolean when detail_applied = true
+    manifold_stub_count: Integer
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant SeatedAndContained {
+        this.rests_on_bed = true
+        this.within_hull_envelope = true
+        this.pierces_hull_shell = false
+    }
+
+    invariant DetailedIsFusedSingleSolid {
+        -- The sump/head/stubs fuse INTO the block — still one solid.
+        this.detail_applied implies this.solid_count = 1
+    }
+
+    invariant DetailAppliedImpliesRequested {
+        this.detail_applied implies this.detail_requested = true
+    }
+}
+
+entity ShaftBody {
+    parameters: ShaftParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    forward_z_mm: Decimal
+    aft_z_mm: Decimal
+    exit_x_mm: Decimal
+    exit_z_mm: Decimal
+    has_additive_stern_tube_boss: Boolean
+    has_coupling_flange: Boolean
+    has_shaft_log_fairing: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant DownAndAft {
+        this.forward_z_mm > this.aft_z_mm
+    }
+
+    invariant ExitBelowWaterline {
+        this.exit_z_mm <= 0.0
+    }
+
+    invariant AdditivePenetration {
+        this.has_additive_stern_tube_boss = true
+    }
+
+    invariant CouplingAndFairingFusedIntoShaft {
+        -- Coupling flange + fairing are coaxial bosses fused into the shaft
+        -- (clarify Q3) — the shaft stays a single solid regardless.
+        this.has_coupling_flange implies this.solid_count = 1
+        this.has_shaft_log_fairing implies this.solid_count = 1
+    }
+}
+
+-- NEW separate top-level body — the strut / P-bracket bridges the tilted shaft
+-- to the hull bottom and cannot fuse cleanly, so it is its own body (clarify Q3).
+entity StrutBody {
+    parameters: ShaftParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    top_z_mm: Decimal
+    bottom_z_mm: Decimal
+    supports_shaft: Boolean
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant ReachesUpTowardHull {
+        this.top_z_mm > this.bottom_z_mm
+    }
+
+    invariant Supports {
+        this.supports_shaft = true
+    }
+}
+
+entity PropellerBody {
+    parameters: PropellerParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    hub_x_mm: Decimal
+    bbox_min_z_mm: Decimal
+    blade_count: Integer
+    airfoil_requested: Boolean
+    airfoil_applied: Boolean
+    blade_section_is_foil: Boolean when airfoil_applied = true
+    root_to_tip_twist_deg: Decimal when airfoil_applied = true
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant BelowWaterline {
+        this.bbox_min_z_mm < 0.0
+    }
+
+    invariant BladeCountMatchesParameters {
+        this.blade_count = this.parameters.blade_count
+    }
+
+    invariant FoilWhenApplied {
+        -- When the airfoil blade is applied (not fallen back), it is a foil
+        -- with non-zero root-to-tip twist (clarify Q2).
+        this.airfoil_applied implies this.blade_section_is_foil = true
+        this.airfoil_applied implies this.root_to_tip_twist_deg != 0.0
+    }
+
+    invariant AppliedImpliesRequested {
+        this.airfoil_applied implies this.airfoil_requested = true
+    }
+}
+
+entity RudderBody {
+    parameters: RudderParameters
+    bundle: PropulsionBundle
+    is_port: Boolean
+    is_partdesign_body: Boolean
+    solid_count: Integer
+    is_valid: Boolean
+    x_mm: Decimal
+    bbox_min_z_mm: Decimal
+    naca_requested: Boolean
+    naca_applied: Boolean
+    blade_section_is_foil: Boolean when naca_applied = true
+    volume_mm3: Decimal
+
+    invariant ValidManifold {
+        this.is_partdesign_body = true
+        this.solid_count = 1
+        this.is_valid = true
+        this.volume_mm3 > 0
+    }
+
+    invariant BelowWaterline {
+        this.bbox_min_z_mm < 0.0
+    }
+
+    invariant FoilWhenApplied {
+        this.naca_applied implies this.blade_section_is_foil = true
+    }
+
+    invariant AppliedImpliesRequested {
+        this.naca_applied implies this.naca_requested = true
+    }
+}
+
+entity PropulsionBundle {
+    hull: HullBody
+    deck_plate: DeckPlate?
+    parameters: PropulsionParameters
+    hull_modified: Boolean
+    hull_volume_before_mm3: Decimal
+    hull_volume_after_mm3: Decimal
+    shape_digest: String
+
+    engines: EngineBlockBody with bundle = this
+    shafts: ShaftBody with bundle = this
+    struts: StrutBody with bundle = this
+    propellers: PropellerBody with bundle = this
+    rudders: RudderBody with bundle = this
+
+    port_shafts: shafts where is_port = true
+    starboard_shafts: shafts where is_port = false
+
+    invariant HullNeverBooleaned {
+        this.hull_modified = false
+        this.hull_volume_after_mm3 = this.hull_volume_before_mm3
+    }
+
+    invariant EnginesMatchEngineCount {
+        this.engines.count = this.parameters.engine_count
+    }
+
+    invariant ShaftsMatchEngineCount {
+        this.shafts.count = this.parameters.engine_count
+    }
+
+    invariant PropellersMatchEngineCount {
+        this.propellers.count = this.parameters.engine_count
+    }
+
+    invariant RuddersMatchRudderCount {
+        this.rudders.count = this.parameters.rudder_count
+    }
+
+    invariant StrutsNeverExceedShafts {
+        -- An optional strut may be omitted on gate failure (clarify Q4), so the
+        -- count is bounded above by shafts * strut_count, never required to match.
+        this.parameters.shaft.strut_bearing = false implies this.struts.count = 0
+    }
+}
+
+-- Rules — detailed builders, each with a manifold-or-fallback gate.
+
+rule ValidateFidelityParameters {
+    when: BuildPropulsion(hull, deck_plate, params)
+    requires:
+        params.propeller.airfoil_blades implies params.propeller.naca_thickness_ratio > 0.0
+        params.propeller.airfoil_blades implies params.propeller.naca_thickness_ratio < 1.0
+        params.propeller.airfoil_blades implies params.propeller.blade_sections >= 2
+        params.propeller.airfoil_blades implies params.propeller.root_pitch_deg != params.propeller.tip_pitch_deg
+        params.rudder.naca_foil implies params.rudder.naca_thickness_ratio > 0.0
+        params.rudder.naca_foil implies params.rudder.naca_thickness_ratio < 1.0
+        params.shaft.coupling_flange implies params.shaft.coupling_flange_diameter_mm > params.shaft.diameter_mm
+        params.shaft.shaft_log_fairing implies params.shaft.shaft_log_fairing_diameter_ratio > 1.0
+        params.engine.detailed implies params.engine.sump_inset_mm * 2 < params.engine.width_mm
+        params.engine.manifold_stub_count >= 0
+}
+
+rule BuildDetailedEngine {
+    -- Sump + head/valve cover + manifold stubs fuse INTO the block (clarify Q3).
+    -- On gate failure, fall back to the spec 014 plain box (clarify Q4).
+    when: BuildOneEngine(params, bed, hull, side)
+    ensures:
+        EngineBlockBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            rests_on_bed: true,
+            within_hull_envelope: true,
+            pierces_hull_shell: false,
+            detail_requested: params.detailed
+        )
+        if not params.detailed:
+            EngineBlockBody.detail_applied = false
+}
+
+rule BuildAirfoilPropeller {
+    -- Symmetric-NACA foil blades stacked with radial pitch/twist, fused with the
+    -- hub. On gate failure, fall back to the spec 014 flat blade (clarify Q4).
+    when: BuildOnePropeller(params, shaft, side)
+    requires:
+        params.diameter_mm > 0
+        params.hub_diameter_mm < params.diameter_mm
+    ensures:
+        PropellerBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            blade_count: params.blade_count,
+            airfoil_requested: params.airfoil_blades
+        )
+        if params.airfoil_blades:
+            PropellerBody.blade_section_is_foil = true
+            PropellerBody.root_to_tip_twist_deg = params.root_pitch_deg - params.tip_pitch_deg
+}
+
+rule BuildNacaRudder {
+    -- Symmetric NACA section extruded over the span + the vertical stock.
+    -- On gate failure, fall back to the spec 014 flat plate (clarify Q4).
+    when: BuildOneRudder(params, propeller, side)
+    ensures:
+        RudderBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            naca_requested: params.naca_foil
+        )
+        if params.naca_foil:
+            RudderBody.blade_section_is_foil = true
+}
+
+rule AddCouplingFlange {
+    -- Coaxial disc with bolt detail, fused into the forward shaft end.
+    when: BuildOneShaft(params, engine, hull, side)
+    requires:
+        params.coupling_flange implies params.coupling_flange_diameter_mm > params.diameter_mm
+    ensures:
+        if params.coupling_flange:
+            ShaftBody.has_coupling_flange = true
+            ShaftBody.solid_count = 1
+}
+
+rule AddShaftLogFairing {
+    -- Additive faired boss around the hull-exit station, fused into the shaft.
+    -- Optional: omitted on gate failure (clarify Q4). Hull never cut.
+    when: BuildOneShaft(params, engine, hull, side)
+    ensures:
+        ShaftBody.has_additive_stern_tube_boss = true
+        if params.shaft_log_fairing:
+            ShaftBody.has_shaft_log_fairing = true
+            ShaftBody.solid_count = 1
+}
+
+rule BuildStrut {
+    -- Separate top-level support body bridging the shaft to the hull bottom.
+    -- Optional: omitted entirely on gate failure (clarify Q4).
+    when: BuildOneStrut(params, shaft, hull, side)
+    requires:
+        params.strut_bearing = true
+        params.strut_arm_width_mm > 0
+    ensures:
+        StrutBody.created(
+            parameters: params,
+            is_port: side,
+            is_partdesign_body: true,
+            solid_count: 1,
+            is_valid: true,
+            supports_shaft: true
+        )
+}
+
+rule FallBackToPlaceholderOnGateFailure {
+    -- A CORE detailed part that fails its manifold gate reverts to the spec 014
+    -- placeholder; the body is still a single valid solid (clarify Q4, FR-010).
+    when: DetailedConstructionFailsManifoldGate(core_body)
+    ensures:
+        core_body.solid_count = 1
+        core_body.is_valid = true
+}
+
+rule OmitOptionalSupportOnGateFailure {
+    -- An OPTIONAL support body (strut/fairing) that fails its gate is omitted;
+    -- the build still succeeds (clarify Q4, FR-010).
+    when: OptionalSupportFailsManifoldGate(bundle, support)
+    ensures: SupportBodyOmitted(bundle, support)
+}
+
+rule RollbackOnPartialFailure {
+    when: PropulsionConstructionFails(bundle)
+    ensures: DocumentRestoredToPreCallState(bundle)
+}
+
+-- Global invariants — must hold across ALL bundles / bodies.
+
+invariant FreeCADIdiomaticAllEngines {
+    for e in EngineBlockBody:
+        e.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllShafts {
+    for s in ShaftBody:
+        s.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllStruts {
+    for s in StrutBody:
+        s.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllPropellers {
+    for p in PropellerBody:
+        p.is_partdesign_body = true
+}
+
+invariant FreeCADIdiomaticAllRudders {
+    for r in RudderBody:
+        r.is_partdesign_body = true
+}
+
+invariant AllEnginesManifold {
+    for e in EngineBlockBody:
+        e.solid_count = 1
+        e.is_valid = true
+}
+
+invariant AllShaftsManifold {
+    for s in ShaftBody:
+        s.solid_count = 1
+        s.is_valid = true
+}
+
+invariant AllStrutsManifold {
+    for s in StrutBody:
+        s.solid_count = 1
+        s.is_valid = true
+}
+
+invariant AllPropellersManifold {
+    for p in PropellerBody:
+        p.solid_count = 1
+        p.is_valid = true
+}
+
+invariant AllRuddersManifold {
+    for r in RudderBody:
+        r.solid_count = 1
+        r.is_valid = true
+}
+
+invariant DetailedPropellersAreFoilOrFellBack {
+    -- Either the foil was applied (and is a real foil) or it fell back; never
+    -- a half-applied broken state.
+    for p in PropellerBody:
+        p.airfoil_applied implies p.blade_section_is_foil = true
+}
+
+invariant DetailedRuddersAreFoilOrFellBack {
+    for r in RudderBody:
+        r.naca_applied implies r.blade_section_is_foil = true
+}
+
+invariant DetailedEnginesStaySingleSolid {
+    for e in EngineBlockBody:
+        e.detail_applied implies e.solid_count = 1
+}
+
+invariant EnginesNeverPierceHull {
+    for e in EngineBlockBody:
+        e.pierces_hull_shell = false
+        e.within_hull_envelope = true
+}
+
+invariant ShaftsRunDownAndAft {
+    for s in ShaftBody:
+        s.forward_z_mm > s.aft_z_mm
+}
+
+invariant ShaftExitsBelowWaterline {
+    for s in ShaftBody:
+        s.exit_z_mm <= 0.0
+}
+
+invariant PropellersBelowWaterline {
+    for p in PropellerBody:
+        p.bbox_min_z_mm < 0.0
+}
+
+invariant RuddersBelowWaterline {
+    for r in RudderBody:
+        r.bbox_min_z_mm < 0.0
+}
+
+invariant HullSolidNeverBooleaned {
+    for b in PropulsionBundle:
+        b.hull_modified = false
+        b.hull_volume_after_mm3 = b.hull_volume_before_mm3
+}
+
+invariant DeterministicShapeDigest {
+    -- Two builds with identical inputs produce identical shape_digest
+    -- (spike-proven byte-reproducibility, clarify Q5, constitution II).
+    for b1 in PropulsionBundle:
+        for b2 in PropulsionBundle:
+            b1.shape_digest = b2.shape_digest
+}
+
+invariant PlaceholderEquivalenceWhenAllDetailOff {
+    -- With every detail flag off, the bundle reproduces the spec 014 build:
+    -- no foil applied, no detailed engine, no struts (FR-009, SC-006).
+    for b in PropulsionBundle:
+        (b.parameters.propeller.airfoil_blades = false
+            and b.parameters.rudder.naca_foil = false
+            and b.parameters.engine.detailed = false
+            and b.parameters.shaft.coupling_flange = false
+            and b.parameters.shaft.strut_bearing = false
+            and b.parameters.shaft.shaft_log_fairing = false)
+        implies b.struts.count = 0
+}
+
+-- Actors and surfaces — the library's public API (unchanged from spec 014).
+
+actor LibraryConsumer { identified_by: HullBody }
+
+surface PropulsionBuildAPI {
+    facing consumer: LibraryConsumer
+    context hull: HullBody
+    context deck_plate: DeckPlate
+    context params: PropulsionParameters
+    provides: BuildPropulsion(hull, deck_plate, params)
+    exposes:
+        PropulsionBundle
+        consumer.loa_mm
+}
+
+-- Deferred items — what spec 021 intentionally still leaves out.
+
+deferred PropellerBody.cambered_blade_sections
+deferred PropulsionBundle.functional_through_hull_shaft_log_cavity
+deferred EngineBlockBody.internal_machinery_detail
+
+-- No open questions remain — all five elicitation candidates were resolved
+-- via /clarify (see spec.md -> ## Clarifications -> Session 2026-06-10).

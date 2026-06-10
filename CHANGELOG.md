@@ -4,6 +4,59 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-06-10
+
+Spec 021 — propulsion fidelity. The running gear stops being a set of stand-in
+boxes and rectangles. Each propeller blade is now a symmetric NACA foil that
+twists from root to tip, lofted through stacked foil sections. The rudder blade
+is a NACA foil too: a rounded leading edge tapering to a fine trailing edge,
+instead of the old flat plate. The shaft carries a bolted coupling flange at the
+gearbox end and a faired log where it leaves the hull, and a separate P-bracket
+strut holds the shaft up under the hull. The engine block grows a marine-diesel
+silhouette: an oil sump hanging below, a head and valve cover on top, and a row
+of exhaust-manifold stubs on the outboard face.
+
+Every part is built additively — the hull is never cut, so it stays a single
+closed solid and `hull_modified` stays `False`. A spike confirmed up front that
+every detailed construction is byte-reproducible, including the propeller blade
+loft that was the real risk: foils are drawn as straight-segment polylines (no
+Sketcher arcs, the thing that drifted in spec 022) and lofted `Ruled=True`, so
+the determinism tests stay green. Each part has a manifold-or-fallback gate: a
+foil, flange, or detailed block that would break the single-solid invariant
+reverts to its spec 014 placeholder, and an optional strut or fairing that fails
+is simply left out. The build always finishes with valid solids.
+
+Detail is on by default. Turn any part back to its spec 014 form with its flag,
+or the whole train at once with `--no-propulsion-detail`; with every flag off the
+output is byte-identical to the spec 014 build.
+
+### Added
+
+- Symmetric-NACA foil propeller blades with root-to-tip twist
+  (`PropellerParameters`: `airfoil_blades`, `naca_thickness_ratio`,
+  `blade_sections`, `root_pitch_deg`, `tip_pitch_deg`).
+- NACA-foil rudder blade (`RudderParameters`: `naca_foil`, `naca_thickness_ratio`).
+- Shaft coupling flange + bolt detail and a faired shaft-log, both fused into the
+  shaft (`ShaftParameters`: `coupling_flange`, `coupling_flange_diameter_mm`,
+  `coupling_flange_thickness_mm`, `coupling_bolt_count`, `shaft_log_fairing`,
+  `shaft_log_fairing_length_mm`, `shaft_log_fairing_diameter_ratio`).
+- Strut / P-bracket support as a separate body (`ShaftParameters`:
+  `strut_bearing`, `strut_count`, `strut_arm_width_mm`); new `Strut` wrapper and
+  `Propulsion.struts`.
+- Detailed marine-diesel engine block (`EngineParameters`: `detailed`,
+  `sump_drop_mm`, `sump_inset_mm`, `head_height_mm`, `manifold_stub_count`,
+  `manifold_stub_diameter_mm`).
+- Per-part `*_applied` flags on the result wrappers (`Propeller.airfoil_applied`
+  + `root_to_tip_twist_deg`, `Rudder.naca_applied`, `Shaft.has_coupling_flange` +
+  `has_shaft_log_fairing`, `EngineBlock.detail_applied`).
+- `storebro build --no-propulsion-detail` — build the running gear at spec 014
+  placeholder fidelity.
+
+### Changed
+
+- `build_propulsion` now produces the detailed running gear by default; the
+  signature, the `Propulsion` aggregate, and every existing field are unchanged.
+
 ## [1.10.0] - 2026-06-03
 
 Spec 024 — interior contoured fittings. The furniture stops being a set of

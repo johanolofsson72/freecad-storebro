@@ -85,6 +85,7 @@ from storebro.propulsion import (
     RudderParameters,
     Shaft,
     ShaftParameters,
+    Strut,
     build_propulsion,
 )
 from storebro.render import (
@@ -94,7 +95,7 @@ from storebro.render import (
     role_for_label,
 )
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 
 __all__ = [
     "PALETTE",
@@ -152,6 +153,7 @@ __all__ = [
     "SalonParameters",
     "Shaft",
     "ShaftParameters",
+    "Strut",
     "WindshieldGlazingParameters",
     "WindshieldParameters",
     "__version__",

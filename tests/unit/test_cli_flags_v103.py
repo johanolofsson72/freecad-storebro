@@ -41,6 +41,9 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         "--beam",
         "--draft",
         "--station-count",
+        # spec 021 (propulsion-fidelity) FR-012: build the running gear at spec
+        # 014 placeholder fidelity (no foils/diesel/struts).
+        "--no-propulsion-detail",
     }
 )
 
