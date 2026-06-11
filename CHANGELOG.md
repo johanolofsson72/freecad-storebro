@@ -4,6 +4,49 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-06-11
+
+Spec 028 — FCStd byte determinism. Two `storebro build` runs that export to FCStd
+in the same process now produce byte-identical files, closing a determinism gap
+that had been marked `xfail` since v1.0.0 (specs 009/011/012).
+
+The fix is a much stronger scrub in the FCStd writer. Earlier specs deliberately
+left the per-session identifiers in `Document.xml` alone — the Object IDs, the
+document UUID, the save-timestamps — because an earlier attempt to scrub them
+broke FreeCAD's cross-references and the file would not reopen. The trick this
+time is that the Object `id` is only a save handle (FreeCAD links objects by
+name, not by id), so renumbering every `id` to a canonical sequence with a single
+XML pass is safe: the scrubbed document reopens with valid geometry. The
+Topological-Naming tags in the `*.Map.txt` and `StringHasher` entries get the same
+treatment: every per-session hash token is replaced by a deterministic value
+derived from where it appears, and the map entries are sorted into a canonical
+order. All of it is gated by a test that reopens the scrubbed file and checks
+every body's shape is still valid with unchanged volume.
+
+What this does NOT fix, and cannot from here: full byte parity across two separate
+process invocations. While implementing this, the residual was traced to a
+FreeCAD-internal limit — two separate processes occasionally emit a structurally
+different topological-naming map for the same compartment (for one cabin, 842
+lines in one run and 841 in the other, differing by a single postfix entry),
+because FreeCAD's string hasher collides differently from one process to the next.
+A different number of tags cannot be reconciled by post-processing one file in
+isolation. So the within-process determinism is real and tested; the
+cross-invocation case stays `xfail`, now with the FreeCAD cause documented rather
+than filed as a future scrub upgrade. Closing it needs a fix in FreeCAD itself (or
+a deterministic hasher reset before save).
+
+### Fixed
+
+- Two same-process FCStd exports are now byte-identical (was `xfail` since v1.0.0).
+
+### Changed
+
+- The FCStd writer scrubs `Document.xml` Object IDs / UUID / timestamps via a
+  consistent renumbering, and canonicalizes the Topological-Naming tags and
+  `*.Map.txt` order — all verified reload-safe.
+- The cross-invocation FCStd determinism `xfail` is reclassified from "v1.1+ scrub
+  upgrade" to a documented FreeCAD-internal limitation.
+
 ## [1.13.0] - 2026-06-10
 
 Spec 026 — export format expansion. The export surface grows from STEP/STL/BREP/

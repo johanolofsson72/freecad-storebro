@@ -10,7 +10,6 @@ import zipfile
 from pathlib import Path
 
 import FreeCAD  # type: ignore[import-not-found]
-import pytest
 
 from storebro import build_hull, export_fcstd
 
@@ -101,19 +100,11 @@ def test_export_fcstd_entries_alphabetically_ordered(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "spec 009/011/012: FCStd in-process determinism becomes flaky once the "
-        "cumulative FreeCAD process state is large enough (the denser hull plus "
-        "the spec 010-013 deck/glazing/interior geometry advance Object ID and "
-        "hex tag counters past the scrub's normalization range when the full "
-        "geometry suite runs before this test). It still passes in isolation; "
-        "within-process reproducibility is preserved per-test. Tracked for the "
-        "v1.1+ scrub upgrade (Fcstd.cross_invocation_byte_determinism)."
-    ),
-)
 def test_export_fcstd_determinism(tmp_path: Path) -> None:
+    # spec 028: the comprehensive scrub (Object-ID renumber + global hash-tag
+    # canonicalization + Map.txt sorting) makes two same-process FCStd exports
+    # byte-identical even under cumulative process state. Was xfail (spec
+    # 009/011/012) until spec 028 closed the within-process gap.
     hull = build_hull()
     a = export_fcstd(hull.document, tmp_path / "a.FCStd")
     b = export_fcstd(hull.document, tmp_path / "b.FCStd")

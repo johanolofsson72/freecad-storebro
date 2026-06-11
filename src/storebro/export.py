@@ -517,7 +517,7 @@ _FCSTD_HEX_TAG_RE = re.compile(rb":H([0-9a-fA-F]+(?::[0-9a-fA-F]+)?)(?=[,;])")
 # session — `1 0 159 3068 1 ;:Hbfb,E;:H5:8,E 0` vs `1 0 159 857 1 ...`.
 # Normalize the counter column to 0 to make exports deterministic.
 _FCSTD_HASH_ROW_COUNTER_RE = re.compile(
-    rb"^(\d+\s+\d+\s+\d+\s+)(\d+)(\s+\d+\s+;:H)",
+    rb"^(\d+\s+\d+\s+\d+\s+)(-?\d+)(\s+\d+\s+;:H)",
     re.MULTILINE,
 )
 
@@ -557,6 +557,13 @@ def _scrub_document_xml(xml_bytes: bytes) -> bytes:
     text = xml_bytes.decode("utf-8")
     root = ET.fromstring(text)
 
+    # spec 028: a bijective Object-ID renumbering. The `id` attribute is a
+    # per-process save handle; FreeCAD cross-references objects by NAME, not by
+    # id, so renumbering every `id` to a canonical first-appearance sequence is
+    # safe — the spike confirmed the renumbered document reloads with valid
+    # geometry. (The prior spec 006 attempt broke the loader by an inconsistent /
+    # uniqueness-breaking scrub; a consistent bijective renumber does not.)
+    id_map: dict[str, str] = {}
     for elem in root.iter():
         if elem.tag in _FCSTD_METADATA_FIELDS:
             if "Date" in elem.tag:
@@ -569,6 +576,15 @@ def _scrub_document_xml(xml_bytes: bytes) -> bytes:
                     elem.set(attr_name, _FCSTD_FIXED_DATE)
                 else:
                     elem.set(attr_name, _FCSTD_FIXED_USER)
+        # spec 028: renumber the per-process id handle.
+        id_val = elem.attrib.get("id")
+        if id_val is not None and id_val.isdigit():
+            if id_val not in id_map:
+                id_map[id_val] = str(len(id_map))
+            elem.set("id", id_map[id_val])
+        # spec 028: scrub the per-session document UUID.
+        if elem.tag == "Uuid" and "value" in elem.attrib:
+            elem.set("value", _FCSTD_FIXED_UUID)
 
     serialized = _canonical_xml_serialize(root)
     text = serialized.decode("utf-8")
@@ -579,37 +595,145 @@ def _scrub_document_xml(xml_bytes: bytes) -> bytes:
     text = _FCSTD_TRANSIENT_PATH_RE.sub(
         rf"\g<1>{_FCSTD_FIXED_TRANSIENT_PATH}\g<2>", text
     )
+    # spec 028: scrub ISO 8601 save-timestamp String values (property VALUEs).
+    text = _FCSTD_ISO_TIMESTAMP_RE.sub(rf"\g<1>{_FCSTD_FIXED_DATE}\g<2>", text)
     return text.encode("utf-8")
 
 
-def _scrub_hex_tags(content: bytes) -> bytes:
-    """Normalize per-session hex tag counters in Shape.Map.txt / StringHasher
-    files. The Topological Naming hex tags (`:H<hex>:`, `:H<hex>,V`) derive
-    from a FreeCAD process-global counter; without normalization two
-    consecutive exports of the same hull produce different Map.txt bytes
-    even though the geometry is identical. Renumber each unique tag to a
-    stable sequential index in document order.
+# spec 028: every per-session Topological-Naming token format in
+# StringHasher.Table.txt / *.Shape.Map.txt. Each maps a per-process hex value
+# to a stable canonical index via ONE global map (shared across all entries) so
+# a tag referenced in both StringHasher and a Map.txt renumbers consistently.
+# Per-session Topological-Naming token formats. Each maps a per-process hex
+# value to a stable canonical index via ONE global map (shared across all
+# entries). Order matters: longer-prefix tokens (`:G#`, `:H`) before the bare
+# `:` token so the bare-colon pattern does not steal their hex.
+_FCSTD_TAG_PATTERNS: tuple[tuple[re.Pattern[bytes], bytes | None], ...] = (
+    (re.compile(rb":G#([0-9a-fA-F]+)"), b":G#"),
+    (re.compile(rb":H((?:-?[0-9a-fA-F]+)?(?::[0-9a-fA-F]+)?)(?=[,;])"), b":H"),
+    (re.compile(rb";D([0-9a-fA-F]+)"), b";D"),
+    # `;gNvN.<hex>` group/vertex postfix — the trailing `.hex` is per-session.
+    (re.compile(rb"(;g\d+v\d+\.)([0-9a-fA-F]+)"), None),
+    # `#<hex>` with an optional `.`/`:`-joined per-session suffix (`#2b7.14`).
+    # Negative lookbehind for `G` so it does not re-match the `#` inside a
+    # `:G#…` token (whose canonical replacement still contains `#`).
+    (re.compile(rb"(?<!G)#(-?[0-9a-fA-F]+(?:[.:][0-9a-fA-F]+)?)"), b"#"),
+    # A bare colon topological token — dotted (`:1.c.6`) or single (`:2cd1`),
+    # bounded by whitespace / separator. (`:H…`/`:G#…` excluded above.)
+    (re.compile(rb":((?:[0-9a-f]+\.)*[0-9a-f]+)(?=[\s,;)])"), b":"),
+)
+_FCSTD_POSTFIX_COUNT_RE = re.compile(rb"PostfixCount \d+")
+_FCSTD_HEX_MASK_RE = re.compile(rb"[0-9a-fA-F]+")
 
-    Note: this scrub does NOT touch Document.xml — only the auxiliary
-    .Map.txt / StringHasher.Table.txt entries that don't participate in
-    FreeCAD's cross-reference graph for shape reconstruction.
+
+def _sort_map_entry(data: bytes, *, by_masked: bool) -> bytes:
+    """Canonicalize `*.Map.txt` body line order (FR-006).
+
+    The per-session counter leak reorders the topological-naming entry lines
+    between builds (the masked-line multiset is identical — pure reordering). Sort
+    the entry lines (those carrying tag data), leaving the structural header/footer
+    (`BeginElementMap`, `PostfixCount`, the Edge/Face/Vertex type names, `EndMap`,
+    blanks) in place. ``by_masked`` sorts on the hex-masked structural key (the
+    coarse pre-renumber pass that aligns by structure); ``by_masked=False`` sorts
+    on the full canonical line (the post-renumber pass that breaks same-structure
+    ties using the now-canonical token values). Proven reload-safe: these maps are
+    rebuilt from geometry, so their order does not affect validity.
     """
-    seen: dict[bytes, bytes] = {}
+    lines = data.split(b"\n")
+    sortable_idx = [
+        i
+        for i, line in enumerate(lines)
+        if (b";" in line or b":H" in line)
+        and not line.startswith(b"Begin")
+        and not line.startswith(b"End")
+    ]
 
-    def _renumber(match: re.Match[bytes]) -> bytes:
-        tag = match.group(1)
-        if tag not in seen:
-            seen[tag] = f"{len(seen):x}".encode()
-        return b":H" + seen[tag]
+    def _key(line: bytes) -> bytes:
+        return _FCSTD_HEX_MASK_RE.sub(b"X", line) if by_masked else line
 
-    content = _FCSTD_HEX_TAG_RE.sub(_renumber, content)
-    content = _FCSTD_HASH_ROW_COUNTER_RE.sub(rb"\g<1>0\g<3>", content)
-    return content
+    payload = sorted((lines[i] for i in sortable_idx), key=_key)
+    for slot, value in zip(sortable_idx, payload, strict=True):
+        lines[slot] = value
+    return b"\n".join(lines)
+
+
+def _scrub_hashed_entries(entries: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    """Canonicalize StringHasher + *.Map.txt: sort, then globally renumber tags.
+
+    spec 028: (1) sort each `*.Map.txt`'s body lines so the per-session reordering
+    is canonicalized (FR-006); (2) one bijective map (keyed by prefix+value), built
+    in first-appearance order over the entries in fixed archive order with sorted
+    lines, renumbers EVERY per-session tag at EVERY occurrence — so cross-entry
+    references (a tag shared by a Map.txt and StringHasher) stay consistent and the
+    document still reloads (these entries do not participate in FreeCAD's
+    shape-reconstruction cross-reference graph; the spec 002 `:H` renumber + the
+    spec 028 sort spike both proved reload-safe). The `PostfixCount` and the
+    StringHasher per-session counter column are zeroed.
+    """
+    def _token_pre_val(match: re.Match[bytes], prefix: bytes | None) -> tuple[bytes, bytes]:
+        # prefix=None → the pattern captured (prefix, value) in two groups.
+        if prefix is None:
+            return match.group(1), match.group(2)
+        return prefix, match.group(1)
+
+    # Pass A — per-entry: zero the PostfixCount, then coarse-sort each Map.txt by
+    # the hex-masked structural key so both builds present tag tokens in the same
+    # structural sequence.
+    staged: list[tuple[str, bytes]] = []
+    for name, data in entries:
+        data = _FCSTD_POSTFIX_COUNT_RE.sub(b"PostfixCount 0", data)
+        if name.endswith(".Map.txt"):
+            data = _sort_map_entry(data, by_masked=True)
+        staged.append((name, data))
+
+    # Pass B — global: build a COUNT- and ORDER-INDEPENDENT canonical map. Each
+    # per-session tag (prefix, value) is identified by the SORTED multiset of
+    # (entry index, masked line) where it occurs. The canonical replacement is a
+    # deterministic hash of that context (NOT a sequential index): two builds put
+    # the same logical tag in the same contexts → same hash, regardless of how
+    # many OTHER distinct tags exist (the per-session hash function collides
+    # differently between processes, so the total token COUNT differs — a
+    # sequential index would offset every tag).
+    contexts: dict[tuple[bytes, bytes], list[tuple[int, bytes]]] = {}
+    for entry_idx, (_name, data) in enumerate(staged):
+        for line in data.split(b"\n"):
+            masked = _FCSTD_HEX_MASK_RE.sub(b"X", line)
+            for pattern, prefix in _FCSTD_TAG_PATTERNS:
+                for match in pattern.finditer(line):
+                    pre, val = _token_pre_val(match, prefix)
+                    contexts.setdefault((pre, val), []).append((entry_idx, masked))
+    canonical: dict[tuple[bytes, bytes], bytes] = {}
+    for key, ctx in contexts.items():
+        digest_src = key[0] + b"|" + b";".join(
+            f"{ei}:".encode() + ml for ei, ml in sorted(ctx)
+        )
+        canonical[key] = hashlib.sha256(digest_src).hexdigest()[:16].encode()
+
+    def _renumberer(prefix: bytes | None) -> Any:
+        def _repl(match: re.Match[bytes]) -> bytes:
+            pre, val = _token_pre_val(match, prefix)
+            return pre + canonical[(pre, val)]
+
+        return _repl
+
+    # Pass C — per-entry: apply the canonical map + zero the StringHasher counter
+    # column, then fine-sort each Map.txt by the now-canonical full line so any
+    # same-masked-key ties resolve deterministically.
+    out: list[tuple[str, bytes]] = []
+    for name, data in staged:
+        for pattern, prefix in _FCSTD_TAG_PATTERNS:
+            data = pattern.sub(_renumberer(prefix), data)
+        data = _FCSTD_HASH_ROW_COUNTER_RE.sub(rb"\g<1>0\g<3>", data)
+        if name.endswith(".Map.txt"):
+            data = _sort_map_entry(data, by_masked=False)
+        out.append((name, data))
+    return out
 
 
 def _scrub_fcstd_zip(raw_zip_bytes: bytes) -> bytes:
     """Re-pack an FCStd zip with deterministic timestamps, metadata, order."""
     entries: list[tuple[str, bytes]] = []
+    hashed_idx: list[int] = []
     with zipfile.ZipFile(io.BytesIO(raw_zip_bytes), "r") as zin:
         for info in zin.infolist():
             name = info.filename
@@ -617,8 +741,16 @@ def _scrub_fcstd_zip(raw_zip_bytes: bytes) -> bytes:
             if name == "Document.xml":
                 data = _scrub_document_xml(data)
             elif name.endswith(".Map.txt") or name == "StringHasher.Table.txt":
-                data = _scrub_hex_tags(data)
+                hashed_idx.append(len(entries))
             entries.append((name, data))
+
+    # spec 028: ONE global renumbering pass over all hashed entries (in fixed
+    # archive order) so cross-entry tag references stay consistent.
+    if hashed_idx:
+        hashed = [entries[i] for i in hashed_idx]
+        scrubbed = _scrub_hashed_entries(hashed)
+        for slot, (name, data) in zip(hashed_idx, scrubbed, strict=True):
+            entries[slot] = (name, data)
 
     # PRESERVE the original FreeCAD-written entry order. Spec 002's FR-020
     # originally required alphabetical sort for determinism, but the

@@ -21,13 +21,17 @@ def _no_partial_file(target: Path, prefix_pattern: str) -> None:
 
 
 def test_step_freecad_failure_no_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import Part  # type: ignore[import-not-found]
-
-    monkeypatch.setattr(
-        Part, "export", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("forced (test)"))
-    )
     hull = build_hull()
     out = tmp_path / "fail.step"
+
+    # spec 026: export_step now writes via the Shape method (canonical.exportStep),
+    # not the geometry-less Part.export path. Part.Shape is immutable, so force the
+    # failure inside the try block via the module helper (same as the brep test).
+    def boom(*a: object, **k: object) -> None:
+        raise RuntimeError("forced (test)")
+
+    monkeypatch.setattr(export_mod, "_sorted_subshapes", boom)
+
     with pytest.raises(ExportWriteError):
         export_step(hull.body, out)
     _no_partial_file(out, ".fail.step.*")

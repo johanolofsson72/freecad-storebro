@@ -4,14 +4,17 @@ Two back-to-back `storebro build` invocations with identical args must
 produce identical SHA-256 digests. The CLI itself delegates the guarantee
 to spec 002's writer (constitution principle II).
 
-**v1.0.0 limitation**: marked xfail for FCStd format. FreeCAD maintains
-process-global counters (Object IDs, UUIDs, timestamp, Topological-Naming
-hex tag base) that advance across `main(["build", ...])` invocations even
-when each builds in a fresh `FreeCAD.newDocument()`. Within-document
-byte-determinism works (see `test_export_fcstd_determinism`). Cross-
-invocation FCStd determinism is deferred to v1.1+ — spec.allium marker
-`Fcstd.cross_invocation_byte_determinism`. STEP / STL / BREP exports are
-unaffected and remain fully byte-deterministic.
+**Spec 028 limitation (FreeCAD-internal)**: marked xfail for FCStd. Spec 028
+closed within-process FCStd determinism (Document.xml Object-ID renumber +
+UUID/timestamp scrub that reloads valid; global context-hash canonicalization
++ sorting of the Map.txt/StringHasher tags). But two SEPARATE process
+invocations occasionally emit a STRUCTURALLY different Topological-Naming map
+for some compartments — e.g. ForwardCabin at 842 vs 841 lines, one extra
+`;<hex>` postfix entry from per-session hash-collision variance in FreeCAD's
+StringHasher. A different NUMBER of distinct tags cannot be canonicalized by
+post-processing a single file, so cross-invocation parity needs a FreeCAD
+upstream fix (or a deterministic hasher reset before save). STEP / STL / BREP
+exports are unaffected and remain fully byte-deterministic.
 """
 
 from __future__ import annotations
@@ -37,13 +40,18 @@ def _extract_hash(stdout: str) -> str:
 
 @pytest.mark.xfail(
     reason=(
-        "v1.0.0: cross-invocation FCStd byte determinism deferred. FreeCAD's "
-        "process-global counters (Object IDs, UUIDs, save-timestamp) advance "
-        "between two main() calls and the FCStd diff cannot be scrubbed "
-        "without breaking the cross-reference graph (loader fails with "
-        "'shape is invalid' or SIGABRT). Within-document and same-process "
-        "STEP/STL/BREP determinism are unaffected. Tracked as "
-        "Fcstd.cross_invocation_byte_determinism for v1.1+."
+        "spec 028: cross-invocation FCStd byte determinism is blocked by a "
+        "FreeCAD-INTERNAL limitation, not a scrub gap. Spec 028 makes Document.xml "
+        "fully deterministic (consistent Object-ID renumber + UUID/timestamp "
+        "scrub, reloads valid) and the Map.txt/StringHasher tags canonical (global "
+        "context-hash + sorting), closing within-process determinism. But two "
+        "SEPARATE process invocations occasionally produce a STRUCTURALLY different "
+        "Topological-Naming map for some compartments (ForwardCabin: 842 vs 841 "
+        "lines — one extra ;<hex> postfix entry from per-session hash-collision "
+        "variance in FreeCAD's StringHasher). A different NUMBER of distinct tags "
+        "cannot be canonicalized by post-processing one file. Tracked as "
+        "Fcstd.cross_invocation_freecad_hasher_nondeterminism (needs a FreeCAD "
+        "upstream fix or a deterministic-hasher reset before save)."
     ),
     strict=False,
 )

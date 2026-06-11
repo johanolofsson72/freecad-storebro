@@ -43,22 +43,10 @@ def _two_writes_fcstd(body, document, path_a, path_b):
         ("step", ".step", _two_writes_step),
         ("stl", ".stl", _two_writes_stl),
         ("brep", ".brep", _two_writes_brep),
-        pytest.param(
-            "fcstd",
-            ".FCStd",
-            _two_writes_fcstd,
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason=(
-                    "spec 009: FCStd in-process determinism becomes flaky after a "
-                    "large enough cumulative FreeCAD process state (denser 9-station "
-                    "hull + bilge_radius variations advance Object ID and hex tag "
-                    "counters past the scrub's normalization range). The test still "
-                    "passes in isolation; reproducibility within a single FreeCAD "
-                    "process is preserved per-test. Tracked for v1.1+ scrub upgrade."
-                ),
-            ),
-        ),
+        # spec 028: FCStd within-process two-writes is now byte-deterministic
+        # (Object-ID renumber + global hash-tag canonicalization + Map.txt sort).
+        # Was xfail (spec 009) until spec 028.
+        ("fcstd", ".FCStd", _two_writes_fcstd),
     ],
 )
 def test_two_writes_produce_identical_sha256(
