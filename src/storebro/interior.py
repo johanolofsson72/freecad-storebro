@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import contextlib
 import importlib.resources
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
@@ -194,6 +195,9 @@ class Position3D:
     y: float
     z: float
 
+    def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "Position3D")  # spec 029
+
 
 @dataclass(frozen=True)
 class Dimensions3D:
@@ -208,6 +212,9 @@ class Dimensions3D:
     length: float
     width: float
     height: float
+
+    def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "Dimensions3D")  # spec 029
 
 
 @dataclass(frozen=True)
@@ -261,6 +268,21 @@ def _furniture_error(field_name: str, reason: str) -> InteriorParameterError:
     return InteriorParameterError("FurnitureParameters", None, field_name, reason)
 
 
+def _reject_nonfinite_floats(instance: object, source: str) -> None:
+    """spec 029: reject nan/inf in every float field of an interior dataclass.
+
+    A bare positivity/range check lets non-finite values through (inf passes
+    ``> 0``; nan compares false to every bound). This guard runs first in each
+    ``__post_init__``, finite-checking every declared float field (skipping ints,
+    bools, strings, and nested dataclasses) and raising :class:`InteriorParameterError`
+    naming the field. Existing positivity/range checks still run for finite values.
+    """
+    for f in fields(instance):  # type: ignore[arg-type]
+        value = getattr(instance, f.name)
+        if isinstance(value, float) and not math.isfinite(value):
+            raise InteriorParameterError(source, None, f.name, "must be finite (not nan/inf)")
+
+
 @dataclass(frozen=True)
 class BerthParameters:
     """Forward-cabin berth (base + cushions) parameters (data-model §1.1).
@@ -288,6 +310,7 @@ class BerthParameters:
     fold_creases: int = 2
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("berth_base_height", self.base_height),
             ("berth_cushion_thickness", self.cushion_thickness),
@@ -338,6 +361,7 @@ class GalleyParameters:
     fascia_thickness: float = 18.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("galley_counter_height", self.counter_height),
             ("galley_counter_thickness", self.counter_thickness),
@@ -378,6 +402,7 @@ class HeadParameters:
     faucet_height: float = 200.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("head_toilet_height", self.toilet_height),
             ("head_sink_height", self.sink_height),
@@ -412,6 +437,7 @@ class SalonParameters:
     fold_creases: int = 2
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("salon_seat_height", self.seat_height),
             ("salon_table_height", self.table_height),
@@ -445,6 +471,7 @@ class HelmParameters:
     seat_height: float = 550.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("helm_console_height", self.console_height),
             ("helm_console_depth", self.console_depth),
@@ -473,6 +500,7 @@ class BulkheadParameters:
     doorway_height: float = 1500.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("bulkhead_thickness", self.thickness),
             ("bulkhead_corner_fillet", self.corner_fillet),
@@ -501,6 +529,7 @@ class EngineRoomParameters:
     raised_top_inset: float = 120.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("engine_room_wall_inset", self.wall_inset),
             ("engine_room_block_height", self.block_height),
@@ -530,6 +559,7 @@ class WetLockerParameters:
     shelf_thickness: float = 20.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self, "FurnitureParameters")
         for name, value in (
             ("wet_locker_wall_inset", self.wall_inset),
             ("wet_locker_locker_height", self.locker_height),

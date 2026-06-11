@@ -4,6 +4,35 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.2] - 2026-06-11
+
+Spec 029 — parametric robustness. Every parameter dataclass now rejects
+non-finite dimensions (`nan`, `+inf`, `-inf`) at construction, so a corrupt
+upstream value fails fast with a clear error instead of flowing into the geometry
+build and producing a broken or non-reproducible shape.
+
+The hole was subtle: a positivity check written as `value <= 0` lets `inf`
+through (`inf` is greater than zero) and lets `nan` through too, because `nan`
+compares false to everything — so `nan <= 0` is `False`, i.e. "valid". The
+propulsion module already guarded against this (its helpers check `math.isfinite`
+first); hull, deck, and interior did not. They do now: the positivity/range
+checks are finite-aware, and the deck and interior dataclasses gained a small
+helper that finite-checks every declared float field automatically (skipping
+integer counts, booleans, and nested dataclasses). Finite "auto" sentinels, like
+the porthole's `0.0` derive-span marker, stay accepted; only `nan`/`inf` are newly
+rejected. Valid inputs are untouched, so all geometry is byte-identical.
+
+This was scoped down from the original spec 029: the FreeCAD expression-engine
+bindings and the optional hard-chine hull variant (both behavior-changing, and in
+the expression case reproducibility-sensitive) moved to spec 031 so this one stays
+a clean, safe hardening fix.
+
+### Fixed
+
+- Every float geometry/dimension field across hull, deck, interior, and
+  propulsion rejects `nan`/`+inf`/`-inf`, raising the module's existing parameter
+  error. Was: only propulsion guarded non-finite values.
+
 ## [1.13.1] - 2026-06-11
 
 Spec 028 — FCStd byte determinism. Two `storebro build` runs that export to FCStd

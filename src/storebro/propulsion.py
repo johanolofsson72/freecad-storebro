@@ -264,6 +264,9 @@ class ShaftParameters:
                 raise PropulsionParameterError(
                     "shaft.coupling_bolt_count", self.coupling_bolt_count, ">= 0"
                 )
+            _require_finite(
+                "shaft.coupling_flange_diameter_mm", self.coupling_flange_diameter_mm
+            )
             if self.coupling_flange_diameter_mm <= self.diameter_mm:
                 raise PropulsionParameterError(
                     "shaft.coupling_flange_diameter_mm",
@@ -277,6 +280,9 @@ class ShaftParameters:
         if self.shaft_log_fairing:
             _require_positive(
                 "shaft.shaft_log_fairing_length_mm", self.shaft_log_fairing_length_mm
+            )
+            _require_finite(
+                "shaft.shaft_log_fairing_diameter_ratio", self.shaft_log_fairing_diameter_ratio
             )
             if self.shaft_log_fairing_diameter_ratio <= 1.0:
                 raise PropulsionParameterError(
@@ -320,6 +326,8 @@ class PropellerParameters:
                 raise PropulsionParameterError(
                     "propeller.blade_sections", self.blade_sections, f">= {_MIN_BLADE_SECTIONS}"
                 )
+            _require_finite("propeller.root_pitch_deg", self.root_pitch_deg)
+            _require_finite("propeller.tip_pitch_deg", self.tip_pitch_deg)
             if self.root_pitch_deg == self.tip_pitch_deg:
                 raise PropulsionParameterError(
                     "propeller.root_pitch_deg",
@@ -404,6 +412,14 @@ def _require_positive(name: str, value: float) -> None:
 def _require_non_negative(name: str, value: float) -> None:
     if not (math.isfinite(value) and value >= 0):
         raise PropulsionParameterError(name, value, ">= 0")
+
+
+def _require_finite(name: str, value: float) -> None:
+    # spec 029: a float field checked only relationally (e.g. `a <= b`, `a == b`)
+    # lets nan/inf through, since nan compares false to everything and inf passes
+    # most bounds. Guard such fields for finiteness explicitly.
+    if not math.isfinite(value):
+        raise PropulsionParameterError(name, value, "finite")
 
 
 # ---------------------------------------------------------------------------

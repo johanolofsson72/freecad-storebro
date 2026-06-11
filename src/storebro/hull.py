@@ -330,7 +330,10 @@ def _validate_hull_parameters(p: HullParameters) -> None:
         ("sheer_height_aft", p.sheer_height_aft),
         ("sheer_height_fwd", p.sheer_height_fwd),
     ):
-        if value <= 0:
+        # spec 029: reject non-finite first — inf passes `<= 0` (inf <= 0 is
+        # False) and nan passes every comparison, so a bare positivity check
+        # would let them through into the geometry build.
+        if not math.isfinite(value) or value <= 0:
             raise HullParameterError(name, value, "> 0")
 
     # Angular ranges (FR-008 + Edge Cases)
@@ -361,7 +364,9 @@ def _validate_hull_parameters(p: HullParameters) -> None:
             float(p.station_count),
             f"[{STATION_COUNT_MIN}, {STATION_COUNT_MAX}]",
         )
-    if p.bilge_radius < 0:
+    # spec 029: nan slips past both `< 0` and `> max` (nan compares false to
+    # everything), so guard finiteness explicitly before the range checks.
+    if not math.isfinite(p.bilge_radius) or p.bilge_radius < 0:
         raise HullParameterError(
             "bilge_radius",
             p.bilge_radius,
@@ -922,14 +927,16 @@ class PortholeParameters:
             ("porthole_diameter", self.diameter),
             ("porthole_recess_depth", self.recess_depth),
         ):
-            if value <= 0:
+            if not math.isfinite(value) or value <= 0:  # spec 029: reject nan/inf
                 raise HullParameterError(name, value, "> 0")
         for name, value in (
             ("porthole_forward_x", self.forward_x),
             ("porthole_aft_x", self.aft_x),
             ("porthole_height_above_waterline", self.height_above_waterline),
         ):
-            if value < 0:
+            # spec 029: reject nan/inf; the finite 0.0 "derive" sentinel is finite
+            # so it still passes (handled by the cross-field check below).
+            if not math.isfinite(value) or value < 0:
                 raise HullParameterError(name, value, ">= 0")
         # 0/0 is the "derive span" sentinel; otherwise forward must precede aft.
         if self.forward_x != 0.0 and self.aft_x != 0.0 and self.forward_x >= self.aft_x:
@@ -959,7 +966,7 @@ class HullGlazingParameters:
     glass_thickness: float = 6.0
 
     def __post_init__(self) -> None:
-        if self.glass_thickness <= 0:
+        if not math.isfinite(self.glass_thickness) or self.glass_thickness <= 0:  # spec 029
             raise HullParameterError("hull_glass_thickness", self.glass_thickness, "> 0")
 
 

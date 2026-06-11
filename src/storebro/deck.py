@@ -23,7 +23,7 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from storebro.hull import Hull, HullParameters
@@ -110,6 +110,21 @@ class DeckParameterError(ValueError):
                 f"is outside the valid range {valid_range}"
             )
         super().__init__(message)
+
+
+def _reject_nonfinite_floats(instance: object) -> None:
+    """spec 029: reject nan/inf in every float field of a deck parameter dataclass.
+
+    A bare positivity/range check lets non-finite values through (inf passes
+    ``> 0``; nan compares false to every bound). This guard runs first in each
+    ``__post_init__``, finite-checking every declared float field (skipping ints,
+    bools, strings, and nested dataclasses) and raising :class:`DeckParameterError`
+    naming the field. Existing positivity/range checks still run for finite values.
+    """
+    for f in fields(instance):  # type: ignore[arg-type]
+        value = getattr(instance, f.name)
+        if isinstance(value, float) and not math.isfinite(value):
+            raise DeckParameterError(f.name, value, "finite (not nan/inf)")
 
 
 class DeckConstructionError(RuntimeError):
@@ -213,6 +228,7 @@ class DeckParameters:
     }
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         _validate_deck_parameters(self)
 
     def to_superstructure_parameters(self) -> DeckSuperstructureParameters:
@@ -402,6 +418,7 @@ class CabinTrunkParameters:
     wall_inset: float = 350.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("cabin_trunk_length", self.length),
             ("cabin_trunk_forward_width", self.forward_width),
@@ -456,6 +473,7 @@ class WindshieldParameters:
     thickness: float = 25.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("windshield_base_width", self.base_width),
             ("windshield_top_width", self.top_width),
@@ -533,6 +551,7 @@ class HardtopParameters:
     curl_sections: int = 7  # spec 020: dense Ruled=True sections tracing the curl
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.curl_sections < 2:
             raise DeckParameterError("hardtop_curl_sections", self.curl_sections, ">= 2")
         for name, value in (
@@ -592,6 +611,7 @@ class PillarParameters:
     inboard_offset_from_sheer: float = 80.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.count_per_side < 0:
             raise DeckParameterError(
                 "pillar_count_per_side",
@@ -636,6 +656,7 @@ class RailingParameters:
     inboard_offset_from_sheer: float = 60.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.post_count_per_side < 0:
             raise DeckParameterError(
                 "railing_post_count_per_side",
@@ -691,6 +712,7 @@ class DeckSuperstructureParameters:
     railings: RailingParameters = field(default_factory=RailingParameters)
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.railings.height_above_deck >= self.hardtop.height_above_deck:
             raise DeckParameterError(
                 "railing_height<>hardtop_height",
@@ -750,6 +772,7 @@ class RubrailParameters:
     insert_thickness: float = 8.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("rubrail_height", self.height),
             ("rubrail_thickness", self.thickness),
@@ -802,6 +825,7 @@ class BowPulpitParameters:
     weld_bead_radius: float = 4.0  # torus minor radius (bead proud of the tube)
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("bow_pulpit_tube_diameter", self.tube_diameter),
             ("bow_pulpit_height", self.height),
@@ -838,6 +862,7 @@ class LifelineParameters:
     sag_depth: float = 25.0  # mid-span dip in mm
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.line_count < 0:
             raise DeckParameterError("lifeline_line_count", self.line_count, ">= 0")
         if self.tube_diameter <= 0:
@@ -876,6 +901,7 @@ class AnchorLockerParameters:
     lid_thickness: float = 20.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("anchor_locker_length", self.length),
             ("anchor_locker_width", self.width),
@@ -922,6 +948,7 @@ class CleatParameters:
     horn_rise: float = 32.0  # how high the curved horn arcs above the base top
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.count_per_station < 0:
             raise DeckParameterError("cleat_count_per_station", self.count_per_station, ">= 0")
         if self.station_count < 0:
@@ -992,6 +1019,7 @@ class CabinWindowParameters:
     glass_thickness: float = 6.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.count_per_side < 0:
             raise DeckParameterError(
                 "cabin_window_count_per_side", self.count_per_side, ">= 0"
@@ -1040,6 +1068,7 @@ class WindshieldGlazingParameters:
     glass_thickness: float = 6.0
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("windshield_frame_border", self.frame_border),
             ("windshield_glass_thickness", self.glass_thickness),
@@ -1113,6 +1142,7 @@ class DsWindowParameters:
     helm_door_side: str = "Starboard"
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         if self.count_per_side < 0:
             raise DeckParameterError(
                 "ds_window_count_per_side", self.count_per_side, ">= 0"
@@ -1189,6 +1219,7 @@ class DeckhouseParameters:
     }
 
     def __post_init__(self) -> None:
+        _reject_nonfinite_floats(self)
         for name, value in (
             ("deckhouse_length", self.length),
             ("deckhouse_forward_width", self.forward_width),
