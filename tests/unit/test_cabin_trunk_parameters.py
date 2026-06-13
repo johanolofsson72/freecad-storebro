@@ -13,7 +13,7 @@ def test_defaults_construct_without_error() -> None:
     assert p.forward_width == 1900.0
     assert p.aft_width == 2150.0
     assert p.height == 1100.0
-    assert p.forward_rake_angle == 8.0
+    assert p.forward_rake_angle == 20.0  # spec 033: raked windshield
     assert p.aft_rake_angle == 2.0
     assert p.wall_inset == 350.0
 

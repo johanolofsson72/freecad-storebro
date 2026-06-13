@@ -422,7 +422,9 @@ class CabinTrunkParameters:
     forward_width: float = 1900.0
     aft_width: float = 2150.0
     height: float = 1100.0
-    forward_rake_angle: float = 8.0
+    # spec 033: raked windshield — the RC34 cabin front leans back well beyond the
+    # near-upright 8° estimate, giving the greenhouse its forward-raked screen.
+    forward_rake_angle: float = 20.0
     aft_rake_angle: float = 2.0
     wall_inset: float = 350.0
 
