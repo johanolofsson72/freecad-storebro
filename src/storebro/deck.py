@@ -4464,11 +4464,13 @@ def _detail_deckhouse(
     )
 
 
-_COCKPIT_GLAZING_HEIGHT_MM = 520.0
-"""spec 033 (proportion correction): the cockpit side glazing is a WINDOW BAND just
-under the hardtop, not a floor-to-roof slab. The old 1500 mm extent built a giant
-vertical pane that read as a boxy blue wall; 520 mm matches the cabin window band and
-leaves the cockpit sides open below it, like docs/references/storo34_side_lines.png."""
+_COCKPIT_GLAZING_HEIGHT_MM = 900.0
+"""spec 033: the aft wheelhouse side glazing — a TALL window band that encloses the
+helm/cockpit sides like the reference wheelhouse, dropping from just under the hardtop
+to a low sill ~400 mm above the deck. Now that the hardtop is low (1300 mm), 900 mm
+reads as a proper wheelhouse window, not the old 1500 mm floor-to-roof slab (which,
+with the 2050 mm hardtop, was a boxy blue wall) nor the too-thin 520 mm top band that
+left the cockpit reading as open below docs/references/storo34_side_lines.png."""
 _COCKPIT_GLAZING_INSET_MM = 60.0
 """spec 033: inset of the glazing from the hardtop X/Y edges."""
 _COCKPIT_GLAZING_THICK_MM = 20.0
