@@ -13,7 +13,7 @@ def test_defaults_construct() -> None:
     p = DeckGlazingParameters()
     assert isinstance(p.cabin_windows, CabinWindowParameters)
     assert isinstance(p.windshield, WindshieldGlazingParameters)
-    assert p.cabin_windows.count_per_side == 1
+    assert p.cabin_windows.count_per_side == 3  # spec 033
     assert p.windshield.enabled is True
 
 

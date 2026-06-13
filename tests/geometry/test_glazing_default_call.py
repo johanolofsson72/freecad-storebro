@@ -15,7 +15,7 @@ def test_default_hull_and_deck_have_glazing(freecad_doc: object) -> None:
     hull = build_hull(document=freecad_doc)
     deck = build_deck(hull)
     assert hull.portholes.count == 6
-    assert deck.cabin_windows.count == 2
+    assert deck.cabin_windows.count == 6  # spec 033: 3-window band per side
     assert deck.windshield.glass_pane is not None
     assert hull.parameters_glazing is not None
     assert deck.parameters_glazing is not None
