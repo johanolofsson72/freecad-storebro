@@ -1252,7 +1252,7 @@ class DeckhouseParameters:
     length: float = 6200.0
     forward_width: float = 2000.0
     aft_width: float = 2200.0
-    height_above_deck: float = 1500.0
+    height_above_deck: float = 1250.0
     front_rake_angle: float = 30.0
     roof_thickness: float = 60.0
     wall_inset: float = 250.0
@@ -1263,7 +1263,7 @@ class DeckhouseParameters:
         "length": 6200.0,
         "forward_width": 2000.0,
         "aft_width": 2200.0,
-        "height_above_deck": 1500.0,
+        "height_above_deck": 1250.0,
         "front_rake_angle": 30.0,
         "roof_thickness": 60.0,
         "wall_inset": 250.0,
@@ -3996,9 +3996,12 @@ def _build_deckhouse(
     import FreeCAD
     import Part
 
+    # spec 033 orientation fix: bow at HIGH X. The enclosed deckhouse runs from a
+    # foredeck aft of the stem, sternward (toward lower X); narrow forward_width
+    # faces the bow, wider aft_width the stern.
     deck_bb = deck_plate.body.Shape.BoundBox
-    fwd_x_mm = deck_bb.XMin + dh.fwd_offset
-    aft_x_mm = fwd_x_mm + dh.length
+    fwd_x_mm = deck_bb.XMax - _SUPERSTRUCTURE_FOREDECK_FRAC * deck_bb.XLength  # bow edge, high X
+    aft_x_mm = fwd_x_mm - dh.length  # stern edge, low X
     deck_top_z_mm = _resolve_deck_top_z_at(deck_plate, (fwd_x_mm + aft_x_mm) / 2.0)
     upper_z_mm = deck_top_z_mm + dh.height_above_deck
     front_rake_dx = dh.height_above_deck * math.tan(math.radians(dh.front_rake_angle))
@@ -4032,7 +4035,8 @@ def _build_deckhouse(
 
     lower_sketch = _trapezoid_sketch("DeckhouseLowerSketch", lower_datum, fwd_x_mm, aft_x_mm)
     upper_sketch = _trapezoid_sketch(
-        "DeckhouseUpperSketch", upper_datum, fwd_x_mm + front_rake_dx, aft_x_mm
+        # Front (bow, high-X) wall rakes aft (toward lower X) going up.
+        "DeckhouseUpperSketch", upper_datum, fwd_x_mm - front_rake_dx, aft_x_mm
     )
     target_doc.recompute()
 

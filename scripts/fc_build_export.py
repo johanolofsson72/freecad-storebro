@@ -43,12 +43,13 @@ def main() -> None:
     out = os.environ["OUT"]
     mode = os.environ.get("MODE", "silhouette")
     variant = os.environ.get("VARIANT", "standard")
+    deck_variant = os.environ.get("DECK", "standard")  # standard | ds
     layout = os.environ.get("LAYOUT", "Alternativ3")
 
     doc = FreeCAD.newDocument("export")
     hull = build_hull(document=doc, hull_variant=variant)
     if mode != "hull":
-        deck = build_deck(hull)
+        deck = build_deck(hull, superstructure_variant=deck_variant)
         if mode == "full":
             from storebro.interior import build_interior
 
