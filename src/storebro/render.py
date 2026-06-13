@@ -101,6 +101,7 @@ _ROLE_RULES: tuple[tuple[str, str], ...] = (
     ("Deck_WindshieldGlass", "glass"),
     ("Deck_CabinWindowGlass", "glass"),
     ("Deck_DeckhouseWindowGlass", "glass"),
+    ("Deck_CockpitGlass", "glass"),  # spec 033 cockpit greenhouse glazing
     ("Hull_PortholeGlass", "glass"),
     ("Deck_Windshield", "frame"),
     # spec 022: the chrome rubrail insert must beat the "Deck_Rubrail" teak rule.

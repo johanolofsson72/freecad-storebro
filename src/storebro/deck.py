@@ -4413,6 +4413,46 @@ def _detail_deckhouse(
     )
 
 
+_COCKPIT_GLAZING_HEIGHT_MM = 1500.0
+"""spec 033: vertical extent of the cockpit side glazing below the hardtop."""
+_COCKPIT_GLAZING_INSET_MM = 60.0
+"""spec 033: inset of the glazing from the hardtop X/Y edges."""
+_COCKPIT_GLAZING_THICK_MM = 20.0
+
+
+def _build_cockpit_glazing(
+    cabin_trunk: CabinTrunk, hardtop: Hardtop, target_doc: Any, added: list[Any]
+) -> list[Any]:
+    """spec 033: glazed side panels filling the gap under the hardtop, so the helm
+    reads as a continuous greenhouse instead of a hardtop floating on posts.
+
+    Two thin translucent panels (port + starboard) derived from the hardtop bounding
+    box: they span the hardtop length (inset), sit just inboard of its side edge, and
+    drop ``_COCKPIT_GLAZING_HEIGHT_MM`` below its underside. Separate bodies (not
+    booleaned into the cabin/hardtop), so they cannot affect those solids' manifold.
+    """
+    import FreeCAD
+    import Part
+
+    hb = hardtop.body.Shape.BoundBox
+    inset = _COCKPIT_GLAZING_INSET_MM
+    x0 = hb.XMin + inset
+    length_x = (hb.XMax - inset) - x0
+    z1 = hb.ZMin
+    z0 = z1 - _COCKPIT_GLAZING_HEIGHT_MM
+    y = hb.YMax - inset
+    thick = _COCKPIT_GLAZING_THICK_MM
+    panels: list[Any] = []
+    for side, sign in (("Port", 1.0), ("Starboard", -1.0)):
+        box = Part.makeBox(length_x, thick, z1 - z0)
+        box.translate(FreeCAD.Vector(x0, sign * y - thick / 2.0, z0))
+        obj = target_doc.addObject("Part::Feature", f"Deck_CockpitGlass{side}")
+        obj.Shape = box
+        added.append(obj)
+        panels.append(obj)
+    return panels
+
+
 # ---------------------------------------------------------------------------
 # Public builder (FR-001 + contracts/python-api.md)
 # ---------------------------------------------------------------------------
@@ -4548,6 +4588,7 @@ def build_deck(
     # spec 016 — the four open-flybridge bodies + cabin windows exist only in
     # the standard variant; the deckhouse exists only in the ds variant.
     cabin_trunk: CabinTrunk | None = None
+    cockpit_glazing: list[Any] = []
     windshield: Windshield | None = None
     hardtop: Hardtop | None = None
     hardtop_pillars: HardtopPillars | None = None
@@ -4626,6 +4667,8 @@ def build_deck(
                 added,
                 superstructure=sp,
             )
+            # spec 033: glaze the cockpit sides under the hardtop (greenhouse).
+            cockpit_glazing = _build_cockpit_glazing(cabin_trunk, hardtop, target_doc, added)
             railings = _build_railings(
                 hull, resolved_params, deck_plate, target_doc, added, superstructure=sp
             )
@@ -4706,6 +4749,8 @@ def build_deck(
     if hardtop_pillars is not None:
         _render_targets.append(hardtop_pillars.body)
     _render_targets.extend(_window_glass)  # spec 019 translucent window panes
+    if cabin_trunk is not None:
+        _render_targets.extend(cockpit_glazing)  # spec 033 cockpit greenhouse glazing
     _apply_render_attributes(_render_targets, enabled=apply_render_attributes)
 
     duration = time.perf_counter() - started
