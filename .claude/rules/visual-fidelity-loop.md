@@ -36,8 +36,19 @@ FreeCAD's bundled Python is separate from the project `.venv` — that is why `u
   `/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd <script.py>`
   with `sys.path.insert(0, "<repo>/src")` at the top of the script. PyYAML is present in the bundle.
   Pass arguments via environment variables (`freecadcmd` does not forward `argv` reliably).
-- **GUI screenshot:** `/Applications/FreeCAD.app/Contents/MacOS/FreeCAD <script.py>`. The script must
-  defer the capture into the event loop and force-exit, or the app hangs / captures a blank frame:
+- **Screenshots — USE THE MESH PROJECTOR (reliable).** FreeCAD's offscreen GL on this machine only
+  renders one low side-ish angle; orthographic side/top and aerial views come out blank or hang
+  (both the GUI `saveImage` path and `OfflineRenderingUtils`). The reliable, fully-controllable
+  render path is two steps:
+  1. `OUT=/tmp/sil.stl MODE=silhouette VARIANT=... freecadcmd scripts/fc_build_export.py` — build +
+     export an STL (MODE `silhouette` = hull + cabin, no railings; `exterior` / `hull` / `full`).
+  2. `uv run --with numpy --with matplotlib python scripts/project_views.py /tmp/sil.stl /tmp/proj`
+     — projects the mesh into clean orthographic `_side` / `_top` / `_iso` PNGs (flat-shaded,
+     painter's algorithm, no OpenGL). Open `..._side.png` and compare to `storo34_side_lines.png`.
+  This is the canonical render step. The GUI `saveImage` route below is a fallback only.
+- **GUI screenshot (fallback — flaky):** `/Applications/FreeCAD.app/Contents/MacOS/FreeCAD <script.py>`.
+  The script must defer the capture into the event loop and force-exit, or the app hangs / captures
+  a blank frame:
   - open the doc, set `ViewObject.Visibility` (show only the solids you want; hide
     `Sketcher::SketchObject`, `PartDesign::Plane`, `App::Origin*`, and `Interior*` for a clean
     silhouette),
