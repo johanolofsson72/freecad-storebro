@@ -64,6 +64,10 @@ _HARD_CHINE_CHINE_Z_FACTOR = 0.35
 # stem and never inverts a tapering section. fraction(s) = base + slope * s.
 _FLARE_FRACTION_BASE = 0.06
 _FLARE_FRACTION_SLOPE = 0.10
+# spec 032: rounded-bilge default for the reference displacement hull. The chine
+# corner is replaced by a 3-facet rounded bilge (7-vertex section) on every station.
+# hull_variant="hard_chine" uses 0.0 (sharp 5-vertex chine), keeping that variant.
+_BILGE_ROUND_STANDARD = 0.35
 OVERSHOOT_TOLERANCE_MM = 1.0
 REFERENCE_FIDELITY_TOLERANCE_PCT = 1.0
 HULL_BUILD_TIME_BUDGET_SECONDS = 10.0
@@ -433,6 +437,12 @@ class _StationProfile:
     # many metres beyond the waterline turn so the topsides flare outboard instead of
     # standing vertical. Default 0.0 = no flare (pre-032 vertical slab side).
     flare_m: float = 0.0
+    # spec 032: rounded bilge — fraction (of the shorter adjacent edge) by which the
+    # sharp chine corner is trimmed back and replaced by a 3-facet rounded bilge, so
+    # every station is a 7-vertex section. Consistent topology keeps the Ruled=True
+    # loft manifold + watertight (unlike spec 018's single arc, which broke it).
+    # 0.0 = sharp chine (5-vertex legacy); > 0 = rounded (7-vertex).
+    bilge_round_frac: float = 0.0
 
 
 def _compute_stations(
@@ -463,6 +473,12 @@ def _compute_stations(
     half_beam_max = p.beam_max / 2.0
     deadrise_rad = math.radians(p.deadrise_amidships)
     _ = deadrise_rad  # reserved for future deadrise-driven sketches
+
+    # spec 032: rounded bilge for the reference displacement hull. hard_chine keeps
+    # the sharp 5-vertex chine; standard rounds it into a 7-vertex section. Every
+    # station in a build shares the same vertex count (loft-compatibility).
+    bilge_round = 0.0 if hull_variant == "hard_chine" else _BILGE_ROUND_STANDARD
+    vcount = 7 if bilge_round > 0.0 else 5
 
     # Canonical anchor profiles. Each tuple is
     # (s, half_beam_top, half_beam_bottom, keel_depth, freeboard) in meters.
@@ -521,7 +537,7 @@ def _compute_stations(
             half_beam_bot = THIN_STEM_HALF_WIDTH_M
             keel_depth = 0.08  # match spec 007 stem keel depth
             freeboard = p.sheer_height_fwd
-            vertex_count = 5
+            vertex_count = vcount
             bilge_radius_m = 0.0
             stem_rake = p.stem_rake_angle
             name = "Stem"
@@ -529,7 +545,7 @@ def _compute_stations(
             # Legacy stem retains the spec 007 80 mm pentagon-with-forefoot.
             half_beam_top, half_beam_bot, keel_depth, freeboard = _interp(1.0)
             topology = StationTopology.PENTAGON_LEGACY
-            vertex_count = 5
+            vertex_count = vcount
             bilge_radius_m = 0.0
             stem_rake = p.stem_rake_angle
             name = "Stem"
@@ -541,7 +557,7 @@ def _compute_stations(
             else:
                 topology = StationTopology.PENTAGON_LEGACY
                 bilge_radius_m = 0.0
-            vertex_count = 5
+            vertex_count = vcount
             stem_rake = 0.0
             # Anchor names for indices 0, 0.25*N, 0.5*N, 0.75*N; otherwise
             # generic "StationNN" for traceability in the FreeCAD tree.
@@ -574,6 +590,7 @@ def _compute_stations(
                 vertex_count=vertex_count,
                 chine_z_factor=chine_z_factor,
                 flare_m=flare_m,
+                bilge_round_frac=bilge_round,
             )
         )
 
@@ -716,16 +733,38 @@ def _create_pentagon_legacy_station_sketch(
     freeboard_mm = profile.freeboard * _MM_PER_M
 
     flare_mm = profile.flare_m * _MM_PER_M
-    pts = [
-        FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
-        FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * profile.chine_z_factor, 0.0),
-        # spec 032: flare keeps the DECK at max beam (half_beam_top) and pulls the
-        # waterline turn inward by flare_m, so the topsides flare outward going up
-        # without the deck exceeding the cited max beam.
-        FreeCAD.Vector(half_beam_top_mm - flare_mm, 0.0, 0.0),
-        FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
-        FreeCAD.Vector(0.0, freeboard_mm, 0.0),
-    ]
+    keel = FreeCAD.Vector(0.0, -keel_depth_mm, 0.0)
+    chine = FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * profile.chine_z_factor, 0.0)
+    # spec 032: flare keeps the DECK at max beam (half_beam_top) and pulls the
+    # waterline turn inward by flare_m, so the topsides flare outward going up
+    # without the deck exceeding the cited max beam.
+    turn = FreeCAD.Vector(half_beam_top_mm - flare_mm, 0.0, 0.0)
+    sheer = FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0)
+    deck = FreeCAD.Vector(0.0, freeboard_mm, 0.0)
+
+    frac = profile.bilge_round_frac
+    if frac <= 0.0:
+        # Legacy sharp chine (5-vertex).
+        pts = [keel, chine, turn, sheer, deck]
+    else:
+        # spec 032: replace the sharp chine corner with a 3-facet rounded bilge,
+        # trimming back along the keel->chine and chine->turn edges and pulling a
+        # mid point toward the corner. 7-vertex section, identical topology on every
+        # station (incl. the stem) so the Ruled=True loft stays manifold + watertight.
+        seg_in = (chine - keel).Length
+        seg_out = (turn - chine).Length
+        t = frac * min(seg_in, seg_out)
+        din = chine - keel
+        din.normalize()
+        dout = turn - chine
+        dout.normalize()
+        a = FreeCAD.Vector(chine.x - din.x * t, chine.y - din.y * t, 0.0)
+        c = FreeCAD.Vector(chine.x + dout.x * t, chine.y + dout.y * t, 0.0)
+        mid = FreeCAD.Vector((a.x + c.x) / 2.0, (a.y + c.y) / 2.0, 0.0)
+        b = FreeCAD.Vector(
+            mid.x + (chine.x - mid.x) * 0.55, mid.y + (chine.y - mid.y) * 0.55, 0.0
+        )
+        pts = [keel, a, b, c, turn, sheer, deck]
 
     line_ids: list[int] = []
     for i in range(len(pts)):
