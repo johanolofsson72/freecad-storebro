@@ -37,8 +37,8 @@ def _n(v: object) -> np.ndarray:
     return a / np.linalg.norm(a)
 
 
-def render(V, out, right, up, vdir, light, size=(18, 6)):
-    right, up, vdir = _n(right), _n(up), _n(vdir)
+def _tris(V, right, up, vdir, light, base_tone):
+    """Return (polys, colors, depths) for one mesh shaded at base_tone."""
     sx, sy = V @ right, V @ up
     dep = V.mean(axis=1) @ vdir
     e1, e2 = V[:, 1] - V[:, 0], V[:, 2] - V[:, 0]
@@ -46,20 +46,33 @@ def render(V, out, right, up, vdir, light, size=(18, 6)):
     ln = np.linalg.norm(nrm, axis=1)
     ln[ln == 0] = 1
     nrm /= ln[:, None]
-    sh = 0.32 + 0.68 * np.clip(np.abs(nrm @ _n(light)), 0, 1)
-    order = np.argsort(dep)
+    sh = 0.32 + 0.68 * np.clip(np.abs(nrm @ light), 0, 1)
     P = np.stack([sx, sy], axis=-1)
+    cols = [(base_tone * s, base_tone * s, min(base_tone * s * 1.08, 1.0)) for s in sh]
+    return list(P), cols, list(dep)
+
+
+def render(V, out, right, up, vdir, light, size=(18, 6), glass=None):
+    right, up, vdir, light = _n(right), _n(up), _n(vdir), _n(light)
+    polys, cols, deps = _tris(V, right, up, vdir, light, 0.86)
+    if glass is not None and len(glass):
+        # Glass/window bodies render dark so the window band + portholes read.
+        gp, gc, gd = _tris(glass, right, up, vdir, light, 0.22)
+        polys += gp
+        cols += gc
+        deps += gd
+    order = np.argsort(deps)
     fig = plt.figure(figsize=size, dpi=110)
     ax = fig.add_subplot(111)
     ax.add_collection(
         PolyCollection(
-            [P[i] for i in order],
-            facecolors=[(0.55 * s, 0.57 * s, 0.61 * s) for s in sh[order]],
+            [polys[i] for i in order],
+            facecolors=[cols[i] for i in order],
             edgecolors="none",
             antialiased=False,
         )
     )
-    a = P.reshape(-1, 2)
+    a = np.concatenate(polys)
     ax.set_xlim(a[:, 0].min(), a[:, 0].max())
     ax.set_ylim(a[:, 1].min(), a[:, 1].max())
     ax.set_aspect("equal")
@@ -71,14 +84,15 @@ def render(V, out, right, up, vdir, light, size=(18, 6)):
 
 def main() -> None:
     stl, base = sys.argv[1], sys.argv[2]
+    glass = load_stl(sys.argv[3]) if len(sys.argv) > 3 else None  # optional dark glass STL
     V = load_stl(stl)
-    print("triangles", len(V))
-    render(V, base + "_side.png", (1, 0, 0), (0, 0, 1), (0, 1, 0), (0.3, -0.6, 0.7), (18, 6))
-    render(V, base + "_top.png", (1, 0, 0), (0, -1, 0), (0, 0, -1), (0.2, -0.4, 0.9), (18, 6))
+    print("triangles", len(V), "glass", 0 if glass is None else len(glass))
+    render(V, base + "_side.png", (1, 0, 0), (0, 0, 1), (0, 1, 0), (0.3, -0.6, 0.7), (18, 6), glass)
+    render(V, base + "_top.png", (1, 0, 0), (0, -1, 0), (0, 0, -1), (0.2, -0.4, 0.9), (18, 6), glass)
     vdir = _n((0.55, 0.6, -0.55))
     right = _n(np.cross(vdir, (0, 0, 1)))
     up2 = np.cross(right, vdir)
-    render(V, base + "_iso.png", right, up2, vdir, (0.4, -0.4, 0.8), (16, 11))
+    render(V, base + "_iso.png", right, up2, vdir, (0.4, -0.4, 0.8), (16, 11), glass)
 
 
 main()

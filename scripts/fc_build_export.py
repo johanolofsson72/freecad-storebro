@@ -67,6 +67,15 @@ def main() -> None:
     elif mode == "silhouette":
         objs = [o for o in objs if not any(k in (o.Label or "") for k in _SILHOUETTE_EXCLUDE)]
 
+    # Optional: split glass/window bodies into a separate STL (env GLASS) so the
+    # projector can render them dark — makes the window band + portholes read.
+    glass_out = os.environ.get("GLASS")
+    if glass_out:
+        glass = [o for o in objs if "Glass" in (o.Label or "") or "Window" in (o.Label or "")]
+        objs = [o for o in objs if o not in glass]
+        Mesh.export(glass, glass_out)
+        print(f"exported {len(glass)} glass bodies -> {glass_out}")
+
     Mesh.export(objs, out)
     print(f"exported {len(objs)} bodies (mode={mode}) -> {out}")
 
