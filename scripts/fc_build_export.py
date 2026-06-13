@@ -67,6 +67,23 @@ def main() -> None:
     elif mode == "silhouette":
         objs = [o for o in objs if not any(k in (o.Label or "") for k in _SILHOUETTE_EXCLUDE)]
 
+    # Optional: COLOR_DIR mode — group bodies by their spec-015 RenderColor and
+    # export one STL per colour (named col_RRGGBBAA.stl), so the projector can render
+    # the boat in its real colours (gelcoat-white hull, teak trim, translucent glass)
+    # instead of flat grey — a big jump toward matching the reference photos.
+    color_dir = os.environ.get("COLOR_DIR")
+    if color_dir:
+        groups: dict[tuple[int, ...], list[object]] = {}
+        for o in objs:
+            rc = getattr(o, "RenderColor", None) or (0.8, 0.8, 0.8, 1.0)
+            key = tuple(round(c * 255) for c in rc)
+            groups.setdefault(key, []).append(o)
+        for key, members in groups.items():
+            name = "col_{:02x}{:02x}{:02x}{:02x}.stl".format(*key)
+            Mesh.export(members, os.path.join(color_dir, name))
+        print(f"exported {len(objs)} bodies in {len(groups)} colour groups -> {color_dir}")
+        return
+
     # Optional: split glass/window bodies into a separate STL (env GLASS) so the
     # projector can render them dark — makes the window band + portholes read.
     glass_out = os.environ.get("GLASS")
