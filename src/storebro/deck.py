@@ -202,10 +202,13 @@ class DeckParameters:
     """
 
     deck_plate_thickness: float = 0.025
-    cabin_trunk_length: float = 4.50
-    cabin_trunk_fwd_offset: float = 2.00
+    # spec 033: cabin proportions re-derived from docs/references/storo34_side_lines.png —
+    # the RC34 cabin is a long, tall greenhouse running ~half the LOA, not the low
+    # estimate-grade box of v1.0.x. Length kept below the hardtop-pillar line (5.4 m).
+    cabin_trunk_length: float = 5.20
+    cabin_trunk_fwd_offset: float = 1.60
     cabin_trunk_width: float = 2.20
-    cabin_trunk_height: float = 1.20
+    cabin_trunk_height: float = 1.45
     cabin_trunk_corner_radius: float = 0.075
     windshield_rake: float = 25.0
     hardtop_length: float = 3.50
@@ -218,10 +221,10 @@ class DeckParameters:
 
     REFERENCE_STOREBRO_DECK_RC34_1972: ClassVar[dict[str, float]] = {
         "deck_plate_thickness": 0.025,
-        "cabin_trunk_length": 4.50,
-        "cabin_trunk_fwd_offset": 2.00,
+        "cabin_trunk_length": 5.20,
+        "cabin_trunk_fwd_offset": 1.60,
         "cabin_trunk_width": 2.20,
-        "cabin_trunk_height": 1.20,
+        "cabin_trunk_height": 1.45,
         "cabin_trunk_corner_radius": 0.075,
         "windshield_rake": 25.0,
         "hardtop_length": 3.50,

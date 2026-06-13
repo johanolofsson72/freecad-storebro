@@ -58,6 +58,12 @@ _HARD_CHINE_BEAM_BLEND = 0.5
 """Fraction the chine half-beam moves from half_beam_bottom toward half_beam_top."""
 _HARD_CHINE_CHINE_Z_FACTOR = 0.35
 """Chine-depth factor for hard-chine stations (vs the 0.6 standard default)."""
+# spec 032: topside flare — the waterline turn is pulled inboard of the deck edge
+# (which stays at max beam) as a FRACTION of the local half-beam, more strongly
+# toward the bow (spray-deflecting flare). Proportional so it vanishes at the thin
+# stem and never inverts a tapering section. fraction(s) = base + slope * s.
+_FLARE_FRACTION_BASE = 0.06
+_FLARE_FRACTION_SLOPE = 0.10
 OVERSHOOT_TOLERANCE_MM = 1.0
 REFERENCE_FIDELITY_TOLERANCE_PCT = 1.0
 HULL_BUILD_TIME_BUDGET_SECONDS = 10.0
@@ -423,6 +429,10 @@ class _StationProfile:
     # (z = -keel_depth * chine_z_factor). Default 0.6 reproduces the pre-031
     # hull byte-identically; the hard_chine variant raises the chine (0.35).
     chine_z_factor: float = 0.6
+    # spec 032: topside flare — the sheer (deck-edge) half-beam is widened by this
+    # many metres beyond the waterline turn so the topsides flare outboard instead of
+    # standing vertical. Default 0.0 = no flare (pre-032 vertical slab side).
+    flare_m: float = 0.0
 
 
 def _compute_stations(
@@ -462,13 +472,17 @@ def _compute_stations(
     # interpolation between amidships and stem). The smoother profile is
     # geometrically more faithful to the RC34 reference — the keel tapers
     # gradually rather than dropping abruptly at the forefoot.
+    # spec 032: classic powerboat sheer — gentle dip amidships, strong rise to the
+    # bow — instead of the near-flat pre-032 line. The forward sheer is lifted well
+    # above sheer_height_fwd so the deck sweeps up at the stem like the RC34 reference.
+    _sheer_fwd_peak = p.sheer_height_fwd * 1.22
     anchors = (
         # s,    h_top,                    h_bot,                            keel,          freeboard
         (0.00,  half_beam_max * 0.70,     half_beam_max * 0.70 * 0.60,      p.draft * 0.85, p.sheer_height_aft),
-        (0.25,  half_beam_max * 0.92,     half_beam_max * 0.92 * 0.50,      p.draft * 0.97, p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.25),
-        (0.50,  half_beam_max,            half_beam_max * 0.40,             p.draft,        p.freeboard),
-        (0.75,  half_beam_max * 0.55,     half_beam_max * 0.55 * 0.30,      p.draft * 0.75, p.sheer_height_aft + (p.sheer_height_fwd - p.sheer_height_aft) * 0.75),
-        (1.00,  0.040,                    0.040,                            p.draft * 0.15, p.sheer_height_fwd),
+        (0.25,  half_beam_max * 0.92,     half_beam_max * 0.92 * 0.50,      p.draft * 0.97, p.sheer_height_aft * 0.96),
+        (0.50,  half_beam_max,            half_beam_max * 0.40,             p.draft,        p.sheer_height_aft * 0.98),
+        (0.75,  half_beam_max * 0.62,     half_beam_max * 0.62 * 0.42,      p.draft * 0.75, p.sheer_height_aft + (_sheer_fwd_peak - p.sheer_height_aft) * 0.62),
+        (1.00,  0.040,                    0.040,                            p.draft * 0.22, _sheer_fwd_peak),
     )
 
     def _interp(s: float) -> tuple[float, float, float, float]:
@@ -495,6 +509,7 @@ def _compute_stations(
         x_position = s * p.loa
         is_stem = i == n - 1
         chine_z_factor = 0.6  # spec 031: default; overridden for hard-chine non-stem stations
+        flare_m = 0.0  # spec 032: topside flare; set for non-stem stations below
 
         if is_stem and p.uses_zero_forefoot_stem:
             # Implementation drift: a true degenerate vertex causes wild
@@ -531,6 +546,11 @@ def _compute_stations(
             # Anchor names for indices 0, 0.25*N, 0.5*N, 0.75*N; otherwise
             # generic "StationNN" for traceability in the FreeCAD tree.
             name = "Transom" if i == 0 else f"Station{i:02d}"
+            # spec 032: topside flare as a fraction of the local half-beam, stronger
+            # toward the bow, capped so the pulled-in waterline turn stays outboard of
+            # the chine (no section inversion / non-manifold loft).
+            _flare_frac = _FLARE_FRACTION_BASE + _FLARE_FRACTION_SLOPE * s
+            flare_m = min(half_beam_top * _flare_frac, (half_beam_top - half_beam_bot) * 0.7)
             # spec 031: hard-chine variant reshapes the non-stem chine vertex —
             # push it outboard toward the topside half-beam (flatter bottom,
             # sharper chine) and raise it (shallower chine). The vertex count is
@@ -553,6 +573,7 @@ def _compute_stations(
                 bilge_radius_m=bilge_radius_m,
                 vertex_count=vertex_count,
                 chine_z_factor=chine_z_factor,
+                flare_m=flare_m,
             )
         )
 
@@ -694,10 +715,14 @@ def _create_pentagon_legacy_station_sketch(
     half_beam_bottom_mm = profile.half_beam_at_bottom * _MM_PER_M
     freeboard_mm = profile.freeboard * _MM_PER_M
 
+    flare_mm = profile.flare_m * _MM_PER_M
     pts = [
         FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
         FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * profile.chine_z_factor, 0.0),
-        FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0),
+        # spec 032: flare keeps the DECK at max beam (half_beam_top) and pulls the
+        # waterline turn inward by flare_m, so the topsides flare outward going up
+        # without the deck exceeding the cited max beam.
+        FreeCAD.Vector(half_beam_top_mm - flare_mm, 0.0, 0.0),
         FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
         FreeCAD.Vector(0.0, freeboard_mm, 0.0),
     ]

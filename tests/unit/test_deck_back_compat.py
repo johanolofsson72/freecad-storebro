@@ -23,10 +23,10 @@ def test_legacy_defaults_produce_valid_composite() -> None:
 
 
 def test_meter_to_mm_conversion_for_cabin_trunk() -> None:
-    """Legacy cabin_trunk_length is 4.5 m; new CabinTrunkParameters.length must be 4500 mm."""
-    legacy = DeckParameters()  # cabin_trunk_length=4.50
+    """Legacy cabin_trunk_length (spec 033: 5.2 m) maps to CabinTrunkParameters.length in mm."""
+    legacy = DeckParameters()  # cabin_trunk_length=5.20
     sp = legacy.to_superstructure_parameters()
-    assert sp.cabin_trunk.length == pytest.approx(4500.0)
+    assert sp.cabin_trunk.length == pytest.approx(5200.0)
 
 
 def test_meter_to_mm_conversion_for_railing_height() -> None:
@@ -94,10 +94,10 @@ def test_legacy_deck_parameters_remains_frozen_and_compatible() -> None:
     p = DeckParameters()
     # All 14 legacy fields are accessible with their v1.0.1 names.
     assert p.deck_plate_thickness == 0.025
-    assert p.cabin_trunk_length == 4.50
-    assert p.cabin_trunk_fwd_offset == 2.00
+    assert p.cabin_trunk_length == 5.20  # spec 033
+    assert p.cabin_trunk_fwd_offset == 1.60  # spec 033
     assert p.cabin_trunk_width == 2.20
-    assert p.cabin_trunk_height == 1.20
+    assert p.cabin_trunk_height == 1.45  # spec 033
     assert p.cabin_trunk_corner_radius == 0.075
     assert p.windshield_rake == 25.0
     assert p.hardtop_length == 3.50
