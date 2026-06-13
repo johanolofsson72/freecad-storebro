@@ -569,12 +569,13 @@ class HardtopParameters:
     forward_width: float = 2200.0
     aft_width: float = 2000.0
     thickness: float = 60.0
-    # spec 033: the RC34 has a STEPPED superstructure — lower forward cabin, a
-    # 750 mm windscreen, then a higher aft hardtop. Restored to the reference 2050 mm
-    # (passes 2/6 wrongly lowered it to a flat coupe roof, which broke the windscreen
-    # relationship — the cited 750 mm screen then poked through). The real fix for the
-    # "floating on stilts" look is a SOLID raised aft section filling the windscreen
-    # gap, not a height reduction — tracked as the remaining spec 033 redesign.
+    # spec 033: the RC34 has a STEPPED superstructure — forward cabin, a 750 mm
+    # windscreen, then a higher aft hardtop. Kept at the reference 2050 mm. NOTE:
+    # making the cockpit read as a continuous greenhouse (no "floating hardtop on
+    # stilts") is NOT a hardtop-height tweak — empirically tried at 1520/2050/2250
+    # and every height either pokes the windscreen through or floats with an open
+    # gap. The real fix is glazed side panels filling the cabin->hardtop gap (new
+    # geometry) — tracked as the remaining spec 033 redesign.
     height_above_deck: float = 2050.0
     leading_edge_curl_depth: float = 80.0
     leading_edge_curl_length: float = 250.0
