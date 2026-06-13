@@ -567,7 +567,10 @@ class HardtopParameters:
     forward_width: float = 2200.0
     aft_width: float = 2000.0
     thickness: float = 60.0
-    height_above_deck: float = 2050.0
+    # spec 033: the RC34 hardtop is a continuous coupe roof at ~cabin-roof height,
+    # not a high flybridge — lowered from 2050 so it integrates with the 1450 mm
+    # cabin top instead of floating on tall stilts.
+    height_above_deck: float = 1650.0
     leading_edge_curl_depth: float = 80.0
     leading_edge_curl_length: float = 250.0
     curl_sections: int = 7  # spec 020: dense Ruled=True sections tracing the curl
