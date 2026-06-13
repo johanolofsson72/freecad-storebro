@@ -104,6 +104,6 @@ def test_legacy_deck_parameters_remains_frozen_and_compatible() -> None:
     assert p.hardtop_height == 0.10
     assert p.hardtop_overhang_fwd == 0.20
     assert p.hardtop_overhang_aft == 0.40
-    assert p.hardtop_pillar_diameter == 0.04
+    assert p.hardtop_pillar_diameter == 0.07  # spec 033: substantial hardtop posts
     assert p.railing_height == 0.65
     assert p.deck_side_walkway == 0.40

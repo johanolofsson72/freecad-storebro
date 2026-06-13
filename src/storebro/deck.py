@@ -215,7 +215,7 @@ class DeckParameters:
     hardtop_height: float = 0.10
     hardtop_overhang_fwd: float = 0.20
     hardtop_overhang_aft: float = 0.40
-    hardtop_pillar_diameter: float = 0.04
+    hardtop_pillar_diameter: float = 0.07
     railing_height: float = 0.65
     deck_side_walkway: float = 0.40
 
@@ -231,7 +231,7 @@ class DeckParameters:
         "hardtop_height": 0.10,
         "hardtop_overhang_fwd": 0.20,
         "hardtop_overhang_aft": 0.40,
-        "hardtop_pillar_diameter": 0.04,
+        "hardtop_pillar_diameter": 0.07,
         "railing_height": 0.65,
         "deck_side_walkway": 0.40,
     }
