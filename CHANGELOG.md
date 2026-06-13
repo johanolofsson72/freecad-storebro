@@ -4,6 +4,32 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-06-13
+
+Spec 031 — hard-chine hull variant (and a deferred item). `build_hull` gains a
+`hull_variant` keyword, mirroring `build_deck`'s `superstructure_variant`.
+`"standard"` (the default) is the existing round-ish soft-chine hull,
+byte-identical to 1.14.x. `"hard_chine"` reshapes each station's cross-section
+into a pronounced hard chine: the chine vertex moves outboard toward the topside
+half-beam and up, flattening the bottom and sharpening the chine knuckle.
+
+The reshaping keeps the 5-vertex station topology, so the dense `Ruled=True` loft
+stays vertex-compatible across every station, including the thin stem. Only the
+chine vertex moves; the keel, topside-turn, sheer, and deck vertices are
+untouched. If the hard-chine loft comes out non-manifold, the build falls back to
+the standard hull and records `Hull.variant_applied = False`. The `Hull` wrapper
+now carries `hull_variant` and `variant_applied`; the CLI gains
+`--hull-variant {standard,hard_chine}` and reports the variant in JSON output.
+
+The second half of this spec, FreeCAD expression-engine bindings so GUI edits
+propagate through the parametric history, is deferred. It writes expression
+strings into `Document.xml`, the same surface spec 028 had to wrestle into
+determinism, so it has to be proven byte-reproducible before it ships, and that
+proof needs a FreeCAD runtime that isn't available on the build machine. The
+design is recorded in the spec; it waits for a FreeCAD-equipped session.
+
+Minor version bump (additive keyword + additive `Hull` fields, back-compat default).
+
 ## [1.14.0] - 2026-06-13
 
 Spec 030 — windshield crown. The windshield's top edge now arches upward at the

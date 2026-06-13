@@ -1,0 +1,107 @@
+-- allium: 3
+--
+-- Spec 031 — expression-bindings-and-hull-variant — ELICITED from spec.md
+--
+-- Two items split from spec 029. ITEM 1 (hard-chine hull variant) is implemented;
+-- ITEM 2 (FreeCAD expression bindings) is DEFERRED (user decision 2026-06-13 —
+-- FreeCAD absent on the dev machine, so setExpression byte-reproducibility into
+-- Document.xml, the spec 028 surface, cannot be verified). build_hull gains a
+-- hull_variant keyword Literal["standard","hard_chine"] (default "standard",
+-- mirroring build_deck's superstructure_variant). "standard" reproduces the
+-- pre-031 hull byte-identically; "hard_chine" moves the v1 chine vertex of the
+-- 5-vertex PENTAGON_LEGACY station outboard + up (flatter bottom, sharper chine),
+-- keeping vertex count = 5 so the Ruled=True AdditiveLoft stays vertex-compatible.
+-- Manifold-or-fallback to the standard hull (variant_applied=false) on failure.
+-- Full track: single synchronous build actor, no state machine.
+
+config {
+    pentagon_vertex_count: Integer = 5
+    manifold_solids_count: Integer = 1
+}
+
+-- A single cross-section station sketch (5-vertex pentagon, loft profile).
+value StationProfile {
+    vertex_count: Integer
+    half_beam_at_top: Decimal       -- topside / sheer half-beam
+    half_beam_at_bottom: Decimal    -- chine (v1 bottom-outer) half-beam
+    chine_beam_ratio: half_beam_at_bottom / half_beam_at_top
+
+    -- FR-004: the variant never changes the vertex count (loft compatibility).
+    invariant FiveVertices { this.vertex_count = pentagon_vertex_count }
+    invariant ChineWithinTopside { this.half_beam_at_bottom <= this.half_beam_at_top }
+}
+
+-- The built hull — observable geometric result + variant bookkeeping.
+entity HullBody {
+    requested_variant: `standard` | `hard_chine`
+    variant_applied: Boolean        -- FR-010: false when hard_chine fell back to standard
+    solids_count: Integer
+    is_valid: Boolean
+    fell_back_to_standard: Boolean
+
+    -- FR-005 / FR-006: a single manifold solid, OR the standard-hull fallback.
+    invariant ManifoldOrFallback {
+        (this.solids_count = manifold_solids_count and this.is_valid = true)
+        or this.fell_back_to_standard = true
+    }
+    -- FR-010: fell-back hard_chine reports variant_applied = false.
+    invariant FallbackObservable {
+        this.fell_back_to_standard = false or this.variant_applied = false
+    }
+    -- A standard request always applies (no fallback path needed for the default).
+    invariant StandardAlwaysApplies {
+        this.requested_variant = `hard_chine` or this.variant_applied = true
+    }
+}
+
+-- Build the hull. Unknown variant is rejected before any FreeCAD call; standard
+-- reproduces pre-031 byte-identically; hard_chine reshapes the chine vertex and
+-- either applies (single solid) or falls back to standard (variant_applied=false).
+rule BuildHull {
+    when: BuildHull(hull_variant)
+    requires: hull_variant in {`standard`, `hard_chine`}
+    ensures:
+        if hull_variant = `standard`:
+            HullBody.created(requested_variant: `standard`, variant_applied: true, solids_count: 1, is_valid: true, fell_back_to_standard: false)
+        if hull_variant = `hard_chine` and HardChineLoftManifold():
+            HullBody.created(requested_variant: `hard_chine`, variant_applied: true, solids_count: 1, is_valid: true, fell_back_to_standard: false)
+        if hull_variant = `hard_chine` and not HardChineLoftManifold():
+            -- FR-006: manifold-or-fallback to the standard hull.
+            HullBody.created(requested_variant: `hard_chine`, variant_applied: false, solids_count: 1, is_valid: true, fell_back_to_standard: true)
+}
+
+-- FR-007: any value outside the variant set is rejected at the API boundary,
+-- before FreeCAD is touched (fail-fast, like superstructure_variant).
+rule RejectUnknownVariant {
+    when: BuildHull(hull_variant)
+    requires: not (hull_variant in {`standard`, `hard_chine`})
+    ensures: HullParameterError(field: `hull_variant`, value: hull_variant)
+}
+
+-- FR-008 / FR-002: reproducibility — every built hull is a valid solid, and the
+-- same variant+params in one process yields byte-identical geometry (no timestamps,
+-- analytic Ruled=True station loft, no Sketcher solver).
+invariant Reproducible {
+    for h in HullBody: h.is_valid = true
+}
+
+-- FR-003 / SC-002: the hard-chine station pushes the chine outboard — its amidships
+-- chine_beam_ratio strictly exceeds the standard station's. (Checked at the amidships
+-- station; the standard station keeps today's vertex positions.)
+invariant HardChinePushesChineOutboard {
+    -- Cross-variant comparison verified in the requires_freecad tests; modeled here
+    -- as the defining property of the hard_chine StationProfile.
+    for s in StationProfile where vertex_count = pentagon_vertex_count:
+        s.half_beam_at_bottom <= s.half_beam_at_top
+}
+
+actor Builder { identified_by: HullBody }
+
+-- ITEM 2 — FreeCAD expression-engine bindings. DEFERRED (user decision 2026-06-13).
+-- Design recorded in research.md; no setExpression code ships in spec 031.
+deferred HullBody.expression_bindings   -- src/storebro/hull.py — obj.setExpression(...), revisit with FreeCAD
+
+open question "Expression-engine bindings (obj.setExpression) are deferred: FreeCAD is absent on the dev machine, so the byte-reproducibility of expression strings serialized into Document.xml (the spec 028 surface) cannot be verified. Already user-decided to defer 2026-06-13; revisit in a FreeCAD-equipped session where reproducibility can be empirically proven before shipping."
+
+-- GUI visual verification in FreeCAD remains the maintainer's pre-tag step
+-- (constitution V); FreeCAD is absent on the dev machine.

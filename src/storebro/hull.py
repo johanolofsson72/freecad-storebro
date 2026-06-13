@@ -17,7 +17,7 @@ import enum
 import math
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 if TYPE_CHECKING:
     pass
@@ -49,6 +49,15 @@ DEFAULT_BILGE_RADIUS_M = 0.10
 STATION_COUNT_MIN = 3
 STATION_COUNT_MAX = 81
 B_SPLINE_STATION_COUNT_THRESHOLD = 8
+# spec 031: hard-chine hull variant. The "hard_chine" variant moves the v1
+# chine vertex of each non-stem PENTAGON_LEGACY station outboard toward the
+# topside half-beam (flatter bottom, sharper chine) and up (shallower chine).
+# Named so the variant carries no magic numbers (constitution I). "standard"
+# keeps the v1 vertex at today's position (chine_z_factor = 0.6).
+_HARD_CHINE_BEAM_BLEND = 0.5
+"""Fraction the chine half-beam moves from half_beam_bottom toward half_beam_top."""
+_HARD_CHINE_CHINE_Z_FACTOR = 0.35
+"""Chine-depth factor for hard-chine stations (vs the 0.6 standard default)."""
 OVERSHOOT_TOLERANCE_MM = 1.0
 REFERENCE_FIDELITY_TOLERANCE_PCT = 1.0
 HULL_BUILD_TIME_BUDGET_SECONDS = 10.0
@@ -410,9 +419,15 @@ class _StationProfile:
     topology: StationTopology = StationTopology.PENTAGON_LEGACY
     bilge_radius_m: float = 0.0
     vertex_count: int = 5
+    # spec 031: chine-depth multiplier for the v1 bottom-outer vertex
+    # (z = -keel_depth * chine_z_factor). Default 0.6 reproduces the pre-031
+    # hull byte-identically; the hard_chine variant raises the chine (0.35).
+    chine_z_factor: float = 0.6
 
 
-def _compute_stations(p: HullParameters) -> list[_StationProfile]:
+def _compute_stations(
+    p: HullParameters, hull_variant: str = "standard"
+) -> list[_StationProfile]:
     """Compute N station profiles for the half-hull, evenly spaced along LOA.
 
     Spec 009 T012: replaces the spec 007 fixed 5-station list with a
@@ -479,6 +494,7 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
         s = i / (n - 1) if n > 1 else 0.0
         x_position = s * p.loa
         is_stem = i == n - 1
+        chine_z_factor = 0.6  # spec 031: default; overridden for hard-chine non-stem stations
 
         if is_stem and p.uses_zero_forefoot_stem:
             # Implementation drift: a true degenerate vertex causes wild
@@ -515,6 +531,13 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
             # Anchor names for indices 0, 0.25*N, 0.5*N, 0.75*N; otherwise
             # generic "StationNN" for traceability in the FreeCAD tree.
             name = "Transom" if i == 0 else f"Station{i:02d}"
+            # spec 031: hard-chine variant reshapes the non-stem chine vertex —
+            # push it outboard toward the topside half-beam (flatter bottom,
+            # sharper chine) and raise it (shallower chine). The vertex count is
+            # unchanged (5), so the Ruled=True loft stays vertex-compatible.
+            if hull_variant == "hard_chine":
+                half_beam_bot = half_beam_bot + (half_beam_top - half_beam_bot) * _HARD_CHINE_BEAM_BLEND
+                chine_z_factor = _HARD_CHINE_CHINE_Z_FACTOR
 
         profiles.append(
             _StationProfile(
@@ -529,6 +552,7 @@ def _compute_stations(p: HullParameters) -> list[_StationProfile]:
                 topology=topology,
                 bilge_radius_m=bilge_radius_m,
                 vertex_count=vertex_count,
+                chine_z_factor=chine_z_factor,
             )
         )
 
@@ -672,7 +696,7 @@ def _create_pentagon_legacy_station_sketch(
 
     pts = [
         FreeCAD.Vector(0.0, -keel_depth_mm, 0.0),
-        FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0),
+        FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * profile.chine_z_factor, 0.0),
         FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0),
         FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0),
         FreeCAD.Vector(0.0, freeboard_mm, 0.0),
@@ -730,7 +754,7 @@ def _create_pentagon_with_arc_station_sketch(
     # be at least twice the radius (for the quarter-circle to fit between
     # the two endpoints without crossing the centerline).
     v0 = FreeCAD.Vector(0.0, -keel_depth_mm, 0.0)
-    v1 = FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * 0.6, 0.0)
+    v1 = FreeCAD.Vector(half_beam_bottom_mm, -keel_depth_mm * profile.chine_z_factor, 0.0)
     v2 = FreeCAD.Vector(half_beam_top_mm, 0.0, 0.0)
     v3 = FreeCAD.Vector(half_beam_top_mm, freeboard_mm, 0.0)
     v4 = FreeCAD.Vector(0.0, freeboard_mm, 0.0)
@@ -1009,6 +1033,10 @@ class Hull:
     # inside build_hull, so adding fields is non-breaking for callers).
     portholes: Porthole | None = None
     parameters_glazing: HullGlazingParameters = field(default_factory=HullGlazingParameters)
+    # spec 031 — hull variant bookkeeping. variant_applied is False iff a
+    # hard-chine build fell back to the standard hull (FR-006/FR-010).
+    hull_variant: str = "standard"
+    variant_applied: bool = True
 
     @property
     def bbox(self) -> tuple[float, float, float]:
@@ -1200,6 +1228,20 @@ def _cut_portholes(
     )
 
 
+def _is_single_valid_solid(shape: Any) -> bool:
+    """spec 031: True iff ``shape`` is a non-null, valid, single-solid B-rep.
+
+    Used by the hard-chine manifold-or-fallback gate (FR-006) — a non-raising
+    sibling of :func:`_assert_hull_manifold`.
+    """
+    return (
+        shape is not None
+        and not shape.isNull()
+        and shape.isValid()
+        and len(shape.Solids) == 1
+    )
+
+
 def _assert_hull_manifold(body: Any, parameters: HullParameters) -> None:
     """FR-008: after cuts, the hull must remain a single closed solid.
 
@@ -1225,6 +1267,7 @@ def build_hull(
     parameters: HullParameters | None = None,
     *,
     parameters_glazing: HullGlazingParameters | None = None,
+    hull_variant: Literal["standard", "hard_chine"] = "standard",
     document: Any = None,
     name: str = "Hull",
     apply_render_attributes: bool = True,
@@ -1239,6 +1282,11 @@ def build_hull(
             document if one exists, else create a new one and activate it.
             A caller-supplied document is never renamed or mutated beyond
             the Body addition (FR-016).
+        hull_variant: Cross-section variant (spec 031). ``"standard"`` (default)
+            is the round-ish soft-chine hull, byte-identical to pre-031.
+            ``"hard_chine"`` reshapes each station's chine vertex outboard and up
+            for a pronounced hard chine; it falls back to the standard hull (with
+            ``Hull.variant_applied = False``) if the reshaped loft is non-manifold.
         name: Body ``Label``. Defaults to ``"Hull"``. FreeCAD's standard
             auto-numbering applies on label collision (``Hull``,
             ``Hull001``, ``Hull002``).
@@ -1262,7 +1310,19 @@ def build_hull(
         >>> custom = build_hull(HullParameters(loa=12.0, beam_max=3.8))  # doctest: +SKIP
         >>> custom.bbox[0] > hull.bbox[0]  # doctest: +SKIP
         True
+        >>> chined = build_hull(hull_variant="hard_chine")  # doctest: +SKIP
+        >>> chined.hull_variant  # doctest: +SKIP
+        'hard_chine'
     """
+    # spec 031 — hull variant guard (before ANY FreeCAD call, so it is
+    # unit-testable without a FreeCAD runtime and fails fast).
+    if hull_variant not in ("standard", "hard_chine"):
+        raise HullParameterError(
+            "hull_variant",
+            None,
+            "one of {'standard', 'hard_chine'}",
+        )
+
     # Lazy first-call version check (FR-013 / research.md R6).
     from storebro._freecad_check import ensure_supported_freecad
 
@@ -1283,6 +1343,7 @@ def build_hull(
 
     started = time.perf_counter()
     added: list[Any] = []
+    variant_applied = True
     try:
         body = target_doc.addObject("PartDesign::Body", "HullBody")
         added.append(body)
@@ -1295,18 +1356,41 @@ def build_hull(
 
         _bind_parameters_to_body_properties(body, resolved_params)
 
-        sketches: list[Any] = []
-        for profile in _compute_stations(resolved_params):
-            datum = _create_datum_plane(profile, body)
-            added.append(datum)
-            sketch = _create_station_sketch(profile, body, datum)
-            added.append(sketch)
-            sketches.append(sketch)
+        def _build_stations(variant: str) -> list[Any]:
+            """Build the datums + station sketches + loft + mirror for ``variant``.
 
-        loft, mirror = _apply_loft_and_mirror(body, sketches, resolved_params)
-        added.extend([loft, mirror])
+            Returns every object it created so the spec 031 manifold-or-fallback
+            gate can discard them if the hard-chine loft is non-manifold.
+            """
+            created: list[Any] = []
+            sks: list[Any] = []
+            for profile in _compute_stations(resolved_params, variant):
+                datum = _create_datum_plane(profile, body)
+                added.append(datum)
+                created.append(datum)
+                sk = _create_station_sketch(profile, body, datum)
+                added.append(sk)
+                created.append(sk)
+                sks.append(sk)
+            lft, mir = _apply_loft_and_mirror(body, sks, resolved_params)
+            added.extend([lft, mir])
+            created.extend([lft, mir])
+            target_doc.recompute()
+            return created
 
-        target_doc.recompute()
+        # spec 031 — build the requested variant, with a manifold-or-fallback gate
+        # (FR-006): if the hard-chine loft is not a single valid solid, discard it
+        # and rebuild the standard hull, recording variant_applied = False.
+        variant_objs = _build_stations(hull_variant)
+        if hull_variant == "hard_chine" and not _is_single_valid_solid(body.Shape):
+            for obj in reversed(variant_objs):
+                added[:] = [a for a in added if getattr(a, "Name", None) != obj.Name]
+                with contextlib.suppress(BaseException):
+                    target_doc.removeObject(obj.Name)
+            with contextlib.suppress(BaseException):
+                body.Tip = None
+            _build_stations("standard")
+            variant_applied = False
 
         # spec 009 T016: fail fast if the B-spline loft overshoots the
         # explicit hull height envelope. No-op when the loft is Ruled=True.
@@ -1357,4 +1441,6 @@ def build_hull(
         build_duration_seconds=duration,
         portholes=portholes,
         parameters_glazing=glazing,
+        hull_variant=hull_variant,
+        variant_applied=variant_applied,
     )

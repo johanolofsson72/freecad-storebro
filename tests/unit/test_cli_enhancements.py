@@ -42,8 +42,14 @@ def _install_fake_chain(monkeypatch: pytest.MonkeyPatch, calls: dict[str, Any]) 
     fake_freecad.newDocument = lambda name: types.SimpleNamespace(Name=name)  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
 
-    def _fake_hull(document: Any = None, parameters: Any = None, apply_render_attributes: bool = True) -> Any:
+    def _fake_hull(
+        document: Any = None,
+        parameters: Any = None,
+        hull_variant: str = "standard",
+        apply_render_attributes: bool = True,
+    ) -> Any:
         calls["hull_params"] = parameters
+        calls["hull_variant"] = hull_variant
         return types.SimpleNamespace(document="doc", body="body")
 
     monkeypatch.setattr(cli, "build_hull", _fake_hull)
@@ -74,7 +80,8 @@ def test_json_output_is_single_object(
     assert rc == 0
     out = capsys.readouterr().out.strip()
     obj = json.loads(out)  # exactly one parseable object
-    assert set(obj) == {"format", "target_path", "byte_count", "sha256", "version"}
+    # spec 031: build also reports the hull variant in JSON output (FR-009).
+    assert set(obj) == {"format", "target_path", "byte_count", "sha256", "version", "hull_variant"}
     assert obj["byte_count"] == 42 and obj["format"] == "fcstd"
 
 

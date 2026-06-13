@@ -35,6 +35,8 @@ V1_0_2_FLAG_SET: frozenset[str] = frozenset(
         "--no-colors",
         # spec 016 (ds-variant-superstructure) FR-015: pick the topsides silhouette.
         "--superstructure",
+        # spec 031 (hull-variant) FR-009: pick the hull cross-section variant.
+        "--hull-variant",
         # spec 027 (cli-enhancements): JSON output + hull overrides.
         "--json",
         "--loa",

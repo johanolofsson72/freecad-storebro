@@ -18,7 +18,7 @@ def test_freecad_failure_wrapped_in_construction_error(
 ) -> None:
     _ = freecad_doc
 
-    def broken_compute_stations(_p: object) -> list[object]:
+    def broken_compute_stations(_p: object, _variant: str = "standard") -> list[object]:
         raise RuntimeError("forced failure for test (simulated FreeCAD error)")
 
     monkeypatch.setattr(hull_mod, "_compute_stations", broken_compute_stations)

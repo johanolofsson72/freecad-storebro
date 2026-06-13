@@ -53,7 +53,11 @@ def _install_fake_build_chain(
     monkeypatch.setitem(sys.modules, "FreeCAD", fake_freecad)
 
     hull = types.SimpleNamespace(document="doc", body="body")
-    monkeypatch.setattr(cli, "build_hull", lambda document=None, parameters=None, apply_render_attributes=True: hull)
+    monkeypatch.setattr(
+        cli,
+        "build_hull",
+        lambda document=None, parameters=None, hull_variant="standard", apply_render_attributes=True: hull,
+    )
     monkeypatch.setattr(
         cli,
         "build_deck",

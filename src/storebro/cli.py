@@ -195,6 +195,15 @@ def _build_top_parser() -> argparse.ArgumentParser:
         ),
     )
     build_p.add_argument(
+        "--hull-variant",
+        choices=("standard", "hard_chine"),
+        default="standard",
+        help=(
+            "Hull cross-section variant: standard (round-ish soft chine) or "
+            "hard_chine (pronounced hard chine). Default: standard."
+        ),
+    )
+    build_p.add_argument(
         "--engine-count",
         type=int,
         choices=(1, 2),
@@ -331,7 +340,10 @@ def _run_build(args: argparse.Namespace) -> int:
 
     fresh_doc = FreeCAD.newDocument("storebro_build")
     hull = build_hull(
-        document=fresh_doc, parameters=hull_params, apply_render_attributes=colors
+        document=fresh_doc,
+        parameters=hull_params,
+        hull_variant=args.hull_variant,
+        apply_render_attributes=colors,
     )
     deck = build_deck(
         hull,
@@ -400,6 +412,7 @@ def _run_build(args: argparse.Namespace) -> int:
                     "byte_count": artifact.byte_count,
                     "sha256": artifact.sha256,
                     "version": __version__,
+                    "hull_variant": args.hull_variant,
                 }
             )
         )
