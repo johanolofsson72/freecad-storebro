@@ -13,7 +13,7 @@ def test_defaults_construct_without_error() -> None:
     assert p.forward_width == 2200.0
     assert p.aft_width == 2000.0
     assert p.thickness == 60.0
-    assert p.height_above_deck == 1520.0  # spec 033: continuous coupe roofline
+    assert p.height_above_deck == 2050.0  # spec 033: reference stepped hardtop
     assert p.leading_edge_curl_depth == 80.0
     assert p.leading_edge_curl_length == 250.0
 

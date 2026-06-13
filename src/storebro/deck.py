@@ -569,10 +569,13 @@ class HardtopParameters:
     forward_width: float = 2200.0
     aft_width: float = 2000.0
     thickness: float = 60.0
-    # spec 033: the RC34 hardtop is a continuous coupe roof at ~cabin-roof height,
-    # not a high flybridge — lowered to just above the 1450 mm cabin top so it reads
-    # as a continuous roofline rather than floating on stilts.
-    height_above_deck: float = 1520.0
+    # spec 033: the RC34 has a STEPPED superstructure — lower forward cabin, a
+    # 750 mm windscreen, then a higher aft hardtop. Restored to the reference 2050 mm
+    # (passes 2/6 wrongly lowered it to a flat coupe roof, which broke the windscreen
+    # relationship — the cited 750 mm screen then poked through). The real fix for the
+    # "floating on stilts" look is a SOLID raised aft section filling the windscreen
+    # gap, not a height reduction — tracked as the remaining spec 033 redesign.
+    height_above_deck: float = 2050.0
     leading_edge_curl_depth: float = 80.0
     leading_edge_curl_length: float = 250.0
     curl_sections: int = 7  # spec 020: dense Ruled=True sections tracing the curl
@@ -2170,7 +2173,11 @@ def _build_windshield(
     wg = (glazing or DeckGlazingParameters()).windshield
     glass_pane: WindshieldGlass | None = None
     if wg.enabled:
-        opening_half_w = ws.base_width / 2.0 - wg.frame_border
+        # The windshield tapers from base_width (bottom) to the narrower top_width;
+        # size the opening off the NARROWEST width so the frame stays a connected ring
+        # at every height instead of breaching the tapered top edge (which split it
+        # into two solids).
+        opening_half_w = min(ws.base_width, ws.top_width) / 2.0 - wg.frame_border
         opening_half_h = (top_z_mm - base_z_mm) / 2.0 - wg.frame_border
         if opening_half_w <= 0 or opening_half_h <= 0:
             raise DeckParameterError(
@@ -2180,9 +2187,14 @@ def _build_windshield(
                 "positive opening must remain)",
             )
         # Frame opening: rectangle on the base YZ datum (normal = global X),
-        # centered at (Y=0, Z=mid_z), ThroughAll along X.
+        # centered at (Y=0, Z=mid_z), ThroughAll along X. base_datum is already
+        # offset to global Z = base_z_mm, so the sketch's local vertical centre is
+        # the mid-height ABOVE the base, not the absolute mid_z (passing mid_z here
+        # double-counted base_z and lifted the opening clear of the slab so it cut
+        # nothing — the spec 030 datum-refactor regression).
+        opening_vc = (top_z_mm - base_z_mm) / 2.0
         opening_sketch = _slab_sketch_rect(
-            body, base_datum, "WindshieldOpeningSketch", opening_half_w, opening_half_h, mid_z_mm, added
+            body, base_datum, "WindshieldOpeningSketch", opening_half_w, opening_half_h, opening_vc, added
         )
         pocket = body.newObject("PartDesign::Pocket", "WindshieldFrameOpening")
         added.append(pocket)
