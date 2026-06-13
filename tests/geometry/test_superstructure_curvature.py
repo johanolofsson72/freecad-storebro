@@ -1,6 +1,7 @@
 """Geometry test: spec 020 superstructure curvature (hardtop curl + swept rail).
 
-Requires FreeCAD. The windshield crown is deferred (see spec 020 Clarifications).
+Requires FreeCAD. The windshield crown landed in spec 030 (transverse arched top
+edge); it is covered by tests/geometry/test_windshield_crown_geom.py.
 """
 
 from __future__ import annotations

@@ -16,6 +16,7 @@ def test_defaults_construct_without_error() -> None:
     assert p.base_width == 2050.0
     assert p.top_width == 1800.0
     assert p.thickness == 25.0
+    assert p.crown_height == 60.0  # spec 030: crowned by default
 
 
 def test_top_narrowing_invariant_holds_on_defaults() -> None:

@@ -34,6 +34,12 @@ if TYPE_CHECKING:
 _MM_PER_M = 1000.0
 """FreeCAD's internal length unit is mm; DeckParameters / HullParameters are in meters."""
 
+_WINDSHIELD_CROWN_SEGMENTS = 16
+"""Spec 030: polyline segments approximating the windshield's transverse top-edge arch.
+
+Even so a vertex lands exactly on the apex (Y=0). A straight-segment polyline (not a
+Sketcher arc) keeps the section sketch byte-reproducible (no constraint solver)."""
+
 
 def _vec_m(x: float, y: float, z: float) -> Any:
     """Build a FreeCAD.Vector from meter-valued coordinates (scaled to mm)."""
@@ -471,6 +477,10 @@ class WindshieldParameters:
     base_width: float = 2050.0
     top_width: float = 1800.0
     thickness: float = 25.0
+    crown_height: float = 60.0
+    """Spec 030: rise (mm) of the transverse top edge at the centerline (Y=0) above the
+    corners. ``0.0`` is the OFF sentinel (flat top, byte-identical to pre-030). Valid range
+    ``[0, top_width/2)`` — the strict upper bound excludes the degenerate over-arch."""
 
     def __post_init__(self) -> None:
         _reject_nonfinite_floats(self)
@@ -481,6 +491,15 @@ class WindshieldParameters:
         ):
             if value <= 0:
                 raise DeckParameterError(name, value, "> 0")
+        # Spec 030 — crown rise: non-negative and strictly below half the (narrowest)
+        # top width so the arc radius stays finite and the section never inverts.
+        # _reject_nonfinite_floats above already rejected NaN/±inf.
+        if not (0.0 <= self.crown_height < self.top_width / 2.0):
+            raise DeckParameterError(
+                "windshield_crown_height",
+                self.crown_height,
+                "[0, top_width/2) mm",
+            )
         if self.top_z <= self.base_z:
             raise DeckParameterError(
                 "windshield_top_z<>base_z",
@@ -2038,23 +2057,93 @@ def _build_windshield(
         _pd_close_loop_constraints(sketch, line_ids)
         return sketch
 
+    def _slab_sketch_arched(
+        name: str, datum: Any, width_mm: float, vertical_z_mm: float
+    ) -> Any:
+        """Spec 030: like ``_slab_sketch`` but with an upward-arched (crowned) top edge.
+
+        The single flat top segment becomes a ``_WINDSHIELD_CROWN_SEGMENTS``-segment
+        polyline tracing a circular arc of half-width ``hw`` and apex rise
+        ``r = ws.crown_height``: ``y(x) = sqrt(R^2 - x^2) - (R - r)`` with
+        ``R = (hw^2 + r^2) / (2r)``. The arch returns to 0 rise at ``x = ±hw`` (corners
+        keep the flat-top Z, so the frame margin is preserved) and peaks at ``+r`` at
+        ``x = 0``. Bottom and side edges are unchanged. Deterministic — straight segments
+        only, no Sketcher arc/solver — so the section stays byte-reproducible.
+        """
+        sketch = body.newObject("Sketcher::SketchObject", name)
+        added.append(sketch)
+        sketch.AttachmentSupport = [(datum, "")]
+        sketch.MapMode = "FlatFace"
+        hw = width_mm / 2.0
+        ht = ws.thickness / 2.0
+        r = ws.crown_height
+        top_base = vertical_z_mm + ht
+        # r < hw is guaranteed by WindshieldParameters validation (crown_height <
+        # top_width/2 <= width/2 for every section), so radius > r and the arc is real.
+        radius = (hw * hw + r * r) / (2.0 * r)
+        n = _WINDSHIELD_CROWN_SEGMENTS
+        # CCW: bottom-left, bottom-right, then the arch top sampled from x=+hw to x=-hw.
+        pts = [
+            FreeCAD.Vector(-hw, vertical_z_mm - ht, 0),
+            FreeCAD.Vector(hw, vertical_z_mm - ht, 0),
+        ]
+        for k in range(n + 1):
+            x = hw - (2.0 * hw) * k / n  # +hw -> -hw; even n puts the apex (x=0) on a vertex
+            rise = math.sqrt(max(radius * radius - x * x, 0.0)) - (radius - r)
+            pts.append(FreeCAD.Vector(x, top_base + rise, 0))
+        line_ids: list[int] = []
+        m = len(pts)
+        for i in range(m):
+            j = (i + 1) % m
+            line_ids.append(sketch.addGeometry(Part.LineSegment(pts[i], pts[j]), False))
+        _pd_close_loop_constraints(sketch, line_ids)
+        return sketch
+
     base_datum = _make_yz_datum("WindshieldBaseDatum", base_x_mm, base_z_mm)
     mid_datum = _make_yz_datum("WindshieldMidDatum", mid_x_mm, mid_z_mm)
     top_datum = _make_yz_datum("WindshieldTopDatum", top_x_mm, top_z_mm)
 
     mid_width = (ws.base_width + ws.top_width) / 2.0
-    base_sketch = _slab_sketch("WindshieldBaseSketch", base_datum, ws.base_width, 0.0)
-    mid_sketch = _slab_sketch("WindshieldMidSketch", mid_datum, mid_width, 0.0)
-    top_sketch = _slab_sketch("WindshieldTopSketch", top_datum, ws.top_width, 0.0)
-    target_doc.recompute()
 
-    loft = body.newObject("PartDesign::AdditiveLoft", "WindshieldLoft")
-    added.append(loft)
-    loft.Profile = (base_sketch, [""])
-    loft.Sections = [(mid_sketch, [""]), (top_sketch, [""])]
-    loft.Ruled = False  # smooth B-spline interpolation (3 sections is dense enough)
-    loft.Closed = False
-    target_doc.recompute()
+    def _make_sections_and_loft(crowned: bool) -> tuple[Any, list[Any]]:
+        """Build the three section sketches + the AdditiveLoft; return (loft, created).
+
+        ``crowned`` selects the arched top edge (uniform rise ``ws.crown_height`` on all
+        three sections, matching vertex topology for a robust ``Ruled=False`` loft); the
+        flat path is byte-identical to the pre-030 windshield. ``created`` lists every
+        object so the manifold-or-fallback gate can discard them on a non-manifold result.
+        """
+        make = _slab_sketch_arched if crowned else _slab_sketch
+        bs = make("WindshieldBaseSketch", base_datum, ws.base_width, 0.0)
+        ms = make("WindshieldMidSketch", mid_datum, mid_width, 0.0)
+        ts = make("WindshieldTopSketch", top_datum, ws.top_width, 0.0)
+        target_doc.recompute()
+        lft = body.newObject("PartDesign::AdditiveLoft", "WindshieldLoft")
+        added.append(lft)
+        lft.Profile = (bs, [""])
+        lft.Sections = [(ms, [""]), (ts, [""])]
+        lft.Ruled = False  # smooth B-spline interpolation (3 sections is dense enough)
+        lft.Closed = False
+        target_doc.recompute()
+        with contextlib.suppress(BaseException):
+            body.Tip = lft
+        return lft, [bs, ms, ts, lft]
+
+    # Spec 030 — crown the transverse top edge when crown_height > 0, with a
+    # manifold-or-fallback gate (FR-009): if the crowned loft is not a single valid
+    # solid, discard it and rebuild the flat-top slab. crown_height == 0.0 takes the
+    # flat path directly, byte-identical to pre-030 (FR-006).
+    want_crown = ws.crown_height > 0.0
+    _loft, _crown_created = _make_sections_and_loft(want_crown)
+    if want_crown and not _is_single_valid_solid(body.Shape):
+        for obj in _crown_created:
+            added[:] = [a for a in added if getattr(a, "Name", None) != obj.Name]
+            with contextlib.suppress(BaseException):
+                target_doc.removeObject(obj.Name)
+        with contextlib.suppress(BaseException):
+            body.Tip = None
+        _loft, _crown_created = _make_sections_and_loft(False)
+        target_doc.recompute()
 
     body.addProperty(
         "App::PropertyAngle",

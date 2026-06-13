@@ -185,7 +185,7 @@ Read these files WHEN you need them — do not load everything upfront:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/029-parametric-robustness/plan.md`.
+at `specs/030-windshield-crown/plan.md`.
 <!-- SPECKIT END -->
 
 ## graphify

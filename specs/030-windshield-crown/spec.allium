@@ -1,0 +1,118 @@
+-- allium: 3
+--
+-- Spec 030 — windshield-crown — ELICITED from spec.md
+--
+-- Geometry refinement of the existing windshield PartDesign::Body (deck.py
+-- _build_windshield). Adds a parametric crown_height that arches the
+-- transverse top edge upward at the centerline (Y=0), falling to the corners.
+-- The arch is a deterministic polyline applied to the top edge of all three
+-- loft sections (base/mid/top) with a uniform rise (FR-003a), so the Ruled=False
+-- loft stays robust and the top face is a smooth fore-aft crowned cap. The
+-- bottom edge of every section stays flat. crown_height = 0.0 reproduces the
+-- pre-030 flat-top windshield byte-identically (FR-006). The spec 011 frame
+-- opening + glass pane are preserved; frame margin is preserved BY CONSTRUCTION
+-- because the crown raises only the centerline while corners keep the flat-top Z
+-- (FR-005). Manifold-or-fallback to the flat-top slab on any FreeCAD failure
+-- (FR-009). Light track: single synchronous build actor, no state machine.
+
+config {
+    crown_height_default_mm: Decimal = 60.0
+    crown_off_sentinel_mm: Decimal = 0.0
+    manifold_solids_count: Integer = 1
+    frame_border_sides: Integer = 4
+}
+
+-- The existing windshield parameter object (frozen dataclass = value object),
+-- gaining one additive float field.
+value WindshieldParameters {
+    crown_height: Decimal        -- mm, rise of the top edge at Y=0; default 60.0, OFF=0.0
+    top_width: Decimal           -- mm, transverse width of the top section (existing field)
+
+    -- FR-008: finite + non-negative (NaN/inf/negative rejected at construction).
+    invariant CrownFinite { is_finite(this.crown_height) }
+    invariant CrownNonNegative { this.crown_height >= 0.0 }
+    -- FR-007: strict upper bound excludes the degenerate over-arch (semicircle+).
+    invariant CrownUnderHalfWidth { this.crown_height < this.top_width / 2 }
+}
+
+-- The built windshield body — the observable geometric result.
+entity WindshieldBody {
+    built_from: WindshieldParameters  -- the params this body was lofted from
+    crowned: Boolean              -- crown actually applied (vs flat-top)
+    fell_back_to_flat: Boolean    -- crowned loft failed -> flat-top slab used
+    solids_count: Integer
+    is_valid: Boolean
+    top_z_at_center: Decimal      -- top-edge Z at Y=0
+    top_z_at_corner: Decimal      -- top-edge Z at port/starboard corners
+    glazing_enabled: Boolean
+    has_frame_opening: Boolean    -- spec 011 WindshieldFrameOpening pocket present
+    has_glass_pane: Boolean       -- separate Deck_WindshieldGlass body present
+    frame_border_preserved: Boolean
+
+    -- FR-004 / FR-009: a single manifold solid, OR the deterministic flat-top fallback.
+    invariant ManifoldOrFallback {
+        (this.crowned = true and this.solids_count = manifold_solids_count and this.is_valid = true)
+        or this.fell_back_to_flat = true
+    }
+    -- FR-002: when crowned, the centerline top rises above the corner top.
+    invariant CrownRaisesCenter {
+        this.crowned = false or this.top_z_at_center > this.top_z_at_corner
+    }
+    -- FR-005: with glazing on, the frame opening + glass pane survive and the
+    -- frame_border margin is preserved (by construction: corners keep flat-top Z).
+    invariant FramePreserved {
+        this.glazing_enabled = false
+        or (this.has_frame_opening = true
+            and this.has_glass_pane = true
+            and this.frame_border_preserved = true)
+    }
+}
+
+-- Build the windshield. A valid crown raises the center and stays manifold;
+-- a non-manifold crowned loft degrades to the flat-top slab; the OFF sentinel
+-- skips the crown path entirely (byte-identical pre-030 output, FR-006).
+rule BuildWindshield {
+    when: BuildWindshield(crown_height, top_width, glazing_enabled)
+    requires:
+        is_finite(crown_height)
+        crown_height >= 0.0
+        crown_height < top_width / 2
+    ensures:
+        if crown_height > 0.0 and CrownedLoftManifold():
+            WindshieldBody.created(crowned: true, fell_back_to_flat: false, solids_count: 1, is_valid: true)
+        if crown_height > 0.0 and not CrownedLoftManifold():
+            -- FR-009: manifold-or-fallback to the existing flat-top slab.
+            WindshieldBody.created(crowned: false, fell_back_to_flat: true, solids_count: 1, is_valid: true)
+        if crown_height = 0.0:
+            -- FR-006: OFF sentinel — flat-top, byte-identical to pre-030.
+            WindshieldBody.created(crowned: false, fell_back_to_flat: false, solids_count: 1, is_valid: true)
+}
+
+-- FR-007/FR-008: out-of-range crown is rejected at construction (fail-fast),
+-- mirroring the existing WindshieldParameters.__post_init__ DeckParameterError pattern.
+rule RejectInvalidCrown {
+    when: ConstructWindshieldParameters(crown_height, top_width)
+    requires: not is_finite(crown_height) or crown_height < 0.0 or crown_height >= top_width / 2
+    ensures: DeckParameterError(field: `windshield_crown_height`, value: crown_height)
+}
+
+-- FR-010: reproducibility — same params in one process yield byte-identical
+-- geometry (no timestamps / env-dependent values; polyline arc is deterministic).
+-- Every produced body is a valid solid.
+invariant Reproducible {
+    for b in WindshieldBody: b.is_valid = true
+}
+
+-- FR-005 global form: any glazed windshield keeps the frame opening + glass pane
+-- and >= frame_border solid frame on all 4 sides.
+invariant FrameBorderOnAllSides {
+    for b in WindshieldBody where glazing_enabled = true:
+        b.frame_border_preserved = true and b.has_frame_opening = true and b.has_glass_pane = true
+}
+
+actor Builder { identified_by: WindshieldBody }
+
+-- FR-011: no new public entity / no signature change beyond the additive field.
+-- The Windshield wrapper (body, rake_degrees, glass_pane) is unchanged.
+-- GUI visual verification in FreeCAD remains the maintainer's pre-tag step
+-- (constitution V); FreeCAD is absent on the dev machine.

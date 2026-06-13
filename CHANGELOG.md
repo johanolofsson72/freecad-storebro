@@ -4,6 +4,33 @@ All notable changes to `freecad-storebro` are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version numbers
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-06-13
+
+Spec 030 — windshield crown. The windshield's top edge now arches upward at the
+centerline instead of running dead flat across the beam. Viewed head-on, the top
+trim bows up in the middle and falls away to the corners, closer to the RC34
+reference silhouette.
+
+A new `crown_height` field on `WindshieldParameters` sets the rise at the
+centerline (default 60 mm). The arch is built by replacing the flat top edge of
+each loft section with a polyline approximation of a circular arc: straight
+segments, not a Sketcher arc, so the geometry stays byte-reproducible. All three
+loft sections get the same rise, which keeps the `Ruled=False` loft well-behaved.
+
+The arch returns to zero rise at the corners, so the corners keep the original
+flat-top height. The spec 011 frame opening and its glass pane are therefore
+untouched, and the frame border is preserved by construction: the crown only adds
+material above the opening, it never cuts into it. If the crowned loft fails to
+produce a single manifold solid, the build falls back to the flat-top slab.
+
+`crown_height = 0.0` is the off switch. It skips the crown code path entirely and
+reproduces the pre-030 flat-top windshield byte-for-byte. Out-of-range values
+(negative, `>= top_width/2`, or non-finite) raise a `DeckParameterError` at
+construction.
+
+This changes the default windshield geometry, so default-build artifacts differ
+from 1.13.x. Minor version bump (additive optional field).
+
 ## [1.13.2] - 2026-06-11
 
 Spec 029 — parametric robustness. Every parameter dataclass now rejects

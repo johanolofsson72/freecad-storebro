@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from storebro import build_deck, build_hull
-from storebro.deck import DeckSuperstructureParameters
+from storebro.deck import DeckSuperstructureParameters, WindshieldParameters
 
 
 def _assert_close(actual: float, expected: float, *, tol_pct: float, name: str) -> None:
@@ -56,7 +56,16 @@ def test_hardtop_bbox_matches_reference_within_1pct(freecad_doc: object) -> None
 @pytest.mark.requires_freecad
 def test_windshield_bbox_matches_reference_within_1pct(freecad_doc: object) -> None:
     hull = build_hull(document=freecad_doc)
-    deck = build_deck(hull, parameters_superstructure=DeckSuperstructureParameters())
+    # Envelope check against the flat reference span (top_z - base_z = 750). The spec 030
+    # transverse crown is an additive top-edge arch (default 60 mm) that lifts ZMax above
+    # this span; pin crown_height=0.0 here so this test stays the base-envelope check. The
+    # crown itself is covered by tests/geometry/test_windshield_crown_geom.py.
+    deck = build_deck(
+        hull,
+        parameters_superstructure=DeckSuperstructureParameters(
+            windshield=WindshieldParameters(crown_height=0.0)
+        ),
+    )
     bb = deck.windshield.body.Shape.BoundBox
     # Reference (research §R1): base_width=2050. Vertical span = top_z - base_z = 750.
     # Width may be measured at the widest point (base), expected ~2050.
