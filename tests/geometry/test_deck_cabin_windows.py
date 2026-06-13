@@ -20,7 +20,7 @@ from storebro.deck import DeckParameterError
 @pytest.mark.requires_freecad
 def test_default_deck_cuts_window_band_per_side(freecad_doc: object) -> None:
     deck = build_deck(build_hull(document=freecad_doc))
-    assert deck.cabin_windows.count == 6  # spec 033: 3 per side x 2 sides (greenhouse band)
+    assert deck.cabin_windows.count == 4  # spec 033 orientation fix: 2 per side x 2 sides
     assert len(deck.cabin_trunk.body.Shape.Solids) == 1, "FR-008: trunk single solid"
 
 
@@ -29,7 +29,7 @@ def test_windows_symmetric_and_partdesign(freecad_doc: object) -> None:
     deck = build_deck(build_hull(document=freecad_doc))
     port = [o for o in deck.document.Objects if o.Label.startswith("CabinWindowPocketPort")]
     star = [o for o in deck.document.Objects if o.Label.startswith("CabinWindowPocketStarboard")]
-    assert len(port) == len(star) == 3  # spec 033: 3 windows per side
+    assert len(port) == len(star) == 2  # spec 033 orientation fix: 2 windows per side
     assert all(o.TypeId == "PartDesign::Pocket" for o in port + star)
 
 

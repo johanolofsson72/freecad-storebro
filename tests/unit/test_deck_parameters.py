@@ -24,7 +24,7 @@ class TestDefaults:
         assert p.deck_plate_thickness == ref["deck_plate_thickness"]
 
     def test_default_cabin_trunk_length(self) -> None:
-        assert DeckParameters().cabin_trunk_length == 5.20  # spec 033: RC34 greenhouse cabin
+        assert DeckParameters().cabin_trunk_length == 2.40  # spec 033: forward cabin (orientation fix)
 
     def test_default_railing_height(self) -> None:
         assert DeckParameters().railing_height == 0.65

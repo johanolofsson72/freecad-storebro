@@ -205,10 +205,20 @@ class DeckParameters:
     # spec 033: cabin proportions re-derived from docs/references/storo34_side_lines.png —
     # the RC34 cabin is a long, tall greenhouse running ~half the LOA, not the low
     # estimate-grade box of v1.0.x. Length kept below the hardtop-pillar line (5.4 m).
-    cabin_trunk_length: float = 5.20
+    # spec 033 orientation fix: the cabin trunk is the FORWARD (lower) part of the
+    # superstructure — forward of the helm/windshield — with the hardtop extending
+    # aft over the cockpit. 2.4 m forward cabin + ~3.7 m hardtop + an 18% foredeck
+    # lands the superstructure at ~0.18-0.77 LOA, matching storo34_side_lines.png.
+    # (The old 5.2 m was sized for the pre-flip layout where the cabin ran aft.)
+    cabin_trunk_length: float = 2.40
     cabin_trunk_fwd_offset: float = 1.60
     cabin_trunk_width: float = 2.20
-    cabin_trunk_height: float = 1.45
+    # spec 033 (proportion correction): the RC34 cabin sits LOW above the side
+    # deck — the standing headroom comes from a sunk cabin sole down in the hull,
+    # not a tall trunk. The 1.45 m estimate read as a boxy workboat against the
+    # reference; 0.95 m restores the long, low greenhouse stance (superstructure
+    # height ~= freeboard, per docs/references/storo34_side_lines.png).
+    cabin_trunk_height: float = 0.95
     cabin_trunk_corner_radius: float = 0.075
     windshield_rake: float = 25.0
     hardtop_length: float = 3.50
@@ -221,10 +231,10 @@ class DeckParameters:
 
     REFERENCE_STOREBRO_DECK_RC34_1972: ClassVar[dict[str, float]] = {
         "deck_plate_thickness": 0.025,
-        "cabin_trunk_length": 5.20,
+        "cabin_trunk_length": 2.40,
         "cabin_trunk_fwd_offset": 1.60,
         "cabin_trunk_width": 2.20,
-        "cabin_trunk_height": 1.45,
+        "cabin_trunk_height": 0.95,
         "cabin_trunk_corner_radius": 0.075,
         "windshield_rake": 25.0,
         "hardtop_length": 3.50,
@@ -422,9 +432,11 @@ class CabinTrunkParameters:
     forward_width: float = 1900.0
     aft_width: float = 2150.0
     height: float = 1100.0
-    # spec 033: raked windshield — the RC34 cabin front leans back well beyond the
-    # near-upright 8° estimate, giving the greenhouse its forward-raked screen.
-    forward_rake_angle: float = 20.0
+    # spec 033 (proportion correction): the cabin-trunk FRONT is near-upright — the
+    # strong forward lean belongs to the windshield (rake_angle_base/top 35-38°),
+    # not the cabin trunk. A 20° trunk rake stacked on the raked screen built a big
+    # triangular wedge; 8° gives the upright forward cabin face of the reference.
+    forward_rake_angle: float = 8.0
     aft_rake_angle: float = 2.0
     wall_inset: float = 350.0
 
@@ -476,7 +488,11 @@ class WindshieldParameters:
     """
 
     base_z: float = 0.0
-    top_z: float = 750.0
+    # spec 033 (proportion correction): with the lowered cabin (950 mm) and hardtop
+    # (1300 mm above deck), the windscreen rises 380 mm from the cabin top so its
+    # upper edge meets the hardtop leading edge (950 + 380 ~= 1300) instead of the
+    # old 750 mm that poked the screen 200 mm above the roof.
+    top_z: float = 380.0
     rake_angle_base: float = 35.0
     rake_angle_top: float = 38.0
     base_width: float = 2050.0
@@ -569,14 +585,14 @@ class HardtopParameters:
     forward_width: float = 2200.0
     aft_width: float = 2000.0
     thickness: float = 60.0
-    # spec 033: the RC34 has a STEPPED superstructure — forward cabin, a 750 mm
-    # windscreen, then a higher aft hardtop. Kept at the reference 2050 mm. NOTE:
-    # making the cockpit read as a continuous greenhouse (no "floating hardtop on
-    # stilts") is NOT a hardtop-height tweak — empirically tried at 1520/2050/2250
-    # and every height either pokes the windscreen through or floats with an open
-    # gap. The real fix is glazed side panels filling the cabin->hardtop gap (new
-    # geometry) — tracked as the remaining spec 033 redesign.
-    height_above_deck: float = 2050.0
+    # spec 033 (proportion correction): the hardtop roof is the highest point of
+    # the superstructure and was driving the boxy, too-tall stance (2050 mm above
+    # the side deck ~= 2.2x the freeboard, vs the reference's ~0.9x). Lowered to
+    # 1300 mm so the roofline sits low and long like docs/references/storo34_side_lines.png.
+    # The windscreen top_z (380 mm) + cabin height (950 mm) lands the screen at
+    # the hardtop leading edge instead of poking through it; the cockpit side
+    # glazing band (a window band, not a full slab) closes the gap below.
+    height_above_deck: float = 1300.0
     leading_edge_curl_depth: float = 80.0
     leading_edge_curl_length: float = 250.0
     curl_sections: int = 7  # spec 020: dense Ruled=True sections tracing the curl
@@ -924,7 +940,9 @@ class AnchorLockerParameters:
     length: float = 500.0
     width: float = 400.0
     height: float = 150.0
-    center_x: float = 8500.0  # foredeck, forward of the cabin trunk (bow = XMax)
+    # spec 033 orientation fix: the cabin trunk moved forward (bow edge ~X8487), so
+    # the foredeck locker moves further toward the stem to stay clear of it.
+    center_x: float = 9400.0  # foredeck, forward of the cabin trunk (bow = XMax)
     # spec 022 — functional recessed cavity + separate lid (additive, defaulted).
     cavity_depth: float = 90.0  # 0 → solid box, no cavity, no lid
     cavity_inset: float = 40.0  # wall thickness around the cavity
@@ -1037,14 +1055,15 @@ class CabinWindowParameters:
     Example:
         >>> p = CabinWindowParameters()
         >>> p.count_per_side, p.length, p.height
-        (3, 1100.0, 600.0)
+        (2, 850.0, 500.0)
     """
 
-    # spec 033: a tall near-continuous run of windows (a greenhouse band) per side,
-    # not a single port — matching the RC34 reference cabin glazing.
-    count_per_side: int = 3
-    length: float = 1100.0
-    height: float = 600.0
+    # spec 033: a near-continuous run of windows (a greenhouse band) per side, not a
+    # single port — matching the RC34 reference cabin glazing. Sized to the 2.4 m
+    # forward cabin trunk (orientation fix): 2 windows per side at 850 mm.
+    count_per_side: int = 2
+    length: float = 850.0
+    height: float = 500.0
     corner_radius: float = 80.0
     recess_depth: float = 15.0
     sill_height: float = 0.0
@@ -1879,6 +1898,17 @@ def _slab_sketch_rect(
     return sketch
 
 
+_SUPERSTRUCTURE_FOREDECK_FRAC = 0.18
+"""spec 033 orientation fix: foredeck length as a fraction of LOA — the gap from the
+bow (stem) to the forward face of the cabin trunk. The reference RC34 superstructure
+starts ~18% aft of the stem (docs/references/storo34_side_lines.png)."""
+
+_AFT_DIR = -1.0
+"""spec 033 orientation fix: the +X axis points toward the bow (the fine stem is at
+high X, the transom at X=0), so 'aft' is the -X direction. Superstructure builders
+that march sternward (windshield rake, hardtop curl/taper) multiply by this."""
+
+
 def _build_cabin_trunk(
     hull: Hull,
     parameters: DeckParameters,
@@ -1901,11 +1931,14 @@ def _build_cabin_trunk(
     sp = superstructure or parameters.to_superstructure_parameters()
     ct = sp.cabin_trunk
 
-    # X coordinates: cabin trunk is positioned aft of the deck plate's
-    # forward edge by `wall_inset`.
+    # X coordinates (spec 033 orientation fix): the hull's bow is the fine stem at
+    # HIGH X; the transom is at X=0. The RC34 reads forward-cabin -> helm -> aft
+    # hardtop, so the cabin trunk sits in the FORWARD portion: its bow (high-X) edge
+    # is set back from the stem by a foredeck, and it extends AFT (toward lower X).
+    # The narrow forward_width faces the bow; the wider aft_width faces the stern.
     deck_bb = deck_plate.body.Shape.BoundBox
-    fwd_x_mm = deck_bb.XMin + ct.wall_inset
-    aft_x_mm = fwd_x_mm + ct.length
+    fwd_x_mm = deck_bb.XMax - _SUPERSTRUCTURE_FOREDECK_FRAC * deck_bb.XLength  # bow edge, high X
+    aft_x_mm = fwd_x_mm - ct.length  # stern edge, low X
     deck_top_z_mm = _resolve_deck_top_z_at(deck_plate, (fwd_x_mm + aft_x_mm) / 2.0)
     upper_z_mm = deck_top_z_mm + ct.height
     fwd_rake_dx = ct.height * math.tan(math.radians(ct.forward_rake_angle))
@@ -1943,8 +1976,10 @@ def _build_cabin_trunk(
     upper_sketch = _trapezoid_sketch(
         "CabinTrunkUpperSketch",
         upper_datum,
-        fwd_x_mm + fwd_rake_dx,
-        aft_x_mm - aft_rake_dx,
+        # Bow face (high X) leans aft (toward lower X) going up; the small aft rake
+        # leans the stern face forward (toward higher X) going up.
+        fwd_x_mm - fwd_rake_dx,
+        aft_x_mm + aft_rake_dx,
     )
     target_doc.recompute()
 
@@ -2002,21 +2037,24 @@ def _build_windshield(
     sp = superstructure or parameters.to_superstructure_parameters()
     ws = sp.windshield
 
-    # The windshield seats at the aft edge of the cabin trunk top.
+    # The windshield seats at the cabin trunk's aft (helm) edge — the stern side,
+    # at LOW X now that the bow is at high X (spec 033 orientation fix). It rakes
+    # AFT (toward lower X) as it rises, leaning back over the helm.
     cabin_bb = cabin_trunk.body.Shape.BoundBox
     cabin_top_z_mm = cabin_bb.ZMax
-    cabin_aft_x_mm = cabin_bb.XMax
+    cabin_helm_x_mm = cabin_bb.XMin
     base_z_mm = cabin_top_z_mm + ws.base_z
     top_z_mm = cabin_top_z_mm + ws.top_z
 
-    # Rake angles measured from vertical; aft offset = vertical_delta * tan(rake).
+    # Rake angles measured from vertical; aft offset = vertical_delta * tan(rake),
+    # applied toward lower X (aft) so the screen leans back, not toward the bow.
     rake_base_rad = math.radians(ws.rake_angle_base)
     rake_top_rad = math.radians(ws.rake_angle_top)
     mid_z_mm = (base_z_mm + top_z_mm) / 2.0
     rake_mid_rad = (rake_base_rad + rake_top_rad) / 2.0
-    base_x_mm = cabin_aft_x_mm
-    mid_x_mm = base_x_mm + (mid_z_mm - base_z_mm) * math.tan(rake_mid_rad)
-    top_x_mm = base_x_mm + (top_z_mm - base_z_mm) * (
+    base_x_mm = cabin_helm_x_mm
+    mid_x_mm = base_x_mm - (mid_z_mm - base_z_mm) * math.tan(rake_mid_rad)
+    top_x_mm = base_x_mm - (top_z_mm - base_z_mm) * (
         (math.tan(rake_base_rad) + math.tan(rake_top_rad)) / 2.0
     )
 
@@ -2452,8 +2490,11 @@ def _build_hardtop(
     hardtop_underside_z_mm = deck_top_z_mm + ht.height_above_deck
     hardtop_topside_z_mm = hardtop_underside_z_mm + ht.thickness
 
-    fwd_x_mm = cabin_trunk.body.Shape.BoundBox.XMax
-    aft_x_mm = fwd_x_mm + ht.length
+    # spec 033 orientation fix: the hardtop's forward (leading) edge sits at the
+    # helm — the cabin trunk's aft/low-X edge — and the roof extends AFT over the
+    # cockpit (toward the stern, lower X). `_AFT_DIR = -1` points aft along X.
+    fwd_x_mm = cabin_trunk.body.Shape.BoundBox.XMin
+    aft_x_mm = fwd_x_mm + _AFT_DIR * ht.length
     curl_drop_mm = ht.leading_edge_curl_depth
 
     body = target_doc.addObject("PartDesign::Body", "Deck_Hardtop")
@@ -2513,14 +2554,17 @@ def _build_hardtop(
             return 0.0
         return curl_drop_mm * (0.5 + 0.5 * math.cos(math.pi * x_local / curl_len))
 
-    # Station X positions: dense across the curl, plus the aft end.
+    # Station X positions: dense across the curl, plus the aft end. The curl and
+    # taper march AFT (toward lower X) via `_AFT_DIR`; x_local stays a positive
+    # distance from the leading edge so `_width_at`/`_curl_drop_at` are unchanged.
     curl_xs = [
-        fwd_x_mm + curl_len * (i / (ht.curl_sections - 1)) for i in range(ht.curl_sections)
+        fwd_x_mm + _AFT_DIR * curl_len * (i / (ht.curl_sections - 1))
+        for i in range(ht.curl_sections)
     ]
     station_xs = [*curl_xs, aft_x_mm]
     sketches: list[Any] = []
     for idx, x_mm in enumerate(station_xs):
-        x_local = x_mm - fwd_x_mm
+        x_local = _AFT_DIR * (x_mm - fwd_x_mm)
         datum = _make_xz_datum_at_x(f"HardtopDatum{idx}", x_mm, center_z_mm)
         sketch = _rect_sketch(
             f"HardtopSketch{idx}", datum, _width_at(x_local) / 2.0, -_curl_drop_at(x_local)
@@ -2593,17 +2637,24 @@ def _build_hardtop_pillars(
     pp = sp.pillars
 
     pillar_bodies: list[Any] = []
-    hardtop_underside_z_mm = hardtop.body.Shape.BoundBox.ZMin
+    hardtop_bb = hardtop.body.Shape.BoundBox
+    hardtop_underside_z_mm = hardtop_bb.ZMin
 
     # Pillar lateral position: inboard from the sheer line by inboard_offset.
     # The sheer line at the pillar's X is sampled from the deck plate.
     if pp.count_per_side > 0:
-        # Distribute pillars evenly between forward_x and aft_x.
+        # spec 033 orientation fix: posts stand under the hardtop's own X-span
+        # (derived from its bounding box) rather than the absolute pp.forward_x/
+        # aft_x defaults, which were tuned to the pre-flip layout. Inset 10% from
+        # each hardtop end so the posts land under the roof, not at its edges.
+        ht_lo, ht_hi = hardtop_bb.XMin, hardtop_bb.XMax
+        inset = 0.10 * (ht_hi - ht_lo)
+        post_fwd, post_aft = ht_hi - inset, ht_lo + inset
         if pp.count_per_side == 1:
-            x_stations = [(pp.forward_x + pp.aft_x) / 2.0]
+            x_stations = [(post_fwd + post_aft) / 2.0]
         else:
-            step = (pp.aft_x - pp.forward_x) / (pp.count_per_side - 1)
-            x_stations = [pp.forward_x + i * step for i in range(pp.count_per_side)]
+            step = (post_aft - post_fwd) / (pp.count_per_side - 1)
+            x_stations = [post_fwd + i * step for i in range(pp.count_per_side)]
 
         for x_mm in x_stations:
             # Deck top Z at this X (the seating invariant fix).
@@ -4413,8 +4464,11 @@ def _detail_deckhouse(
     )
 
 
-_COCKPIT_GLAZING_HEIGHT_MM = 1500.0
-"""spec 033: vertical extent of the cockpit side glazing below the hardtop."""
+_COCKPIT_GLAZING_HEIGHT_MM = 520.0
+"""spec 033 (proportion correction): the cockpit side glazing is a WINDOW BAND just
+under the hardtop, not a floor-to-roof slab. The old 1500 mm extent built a giant
+vertical pane that read as a boxy blue wall; 520 mm matches the cabin window band and
+leaves the cockpit sides open below it, like docs/references/storo34_side_lines.png."""
 _COCKPIT_GLAZING_INSET_MM = 60.0
 """spec 033: inset of the glazing from the hardtop X/Y edges."""
 _COCKPIT_GLAZING_THICK_MM = 20.0

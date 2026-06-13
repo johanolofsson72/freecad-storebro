@@ -67,10 +67,10 @@ def test_windshield_bbox_matches_reference_within_1pct(freecad_doc: object) -> N
         ),
     )
     bb = deck.windshield.body.Shape.BoundBox
-    # Reference (research §R1): base_width=2050. Vertical span = top_z - base_z = 750.
-    # Width may be measured at the widest point (base), expected ~2050.
+    # Reference: base_width=2050. Vertical span = top_z - base_z = 380 (spec 033
+    # proportion correction: the screen rises to meet the lowered hardtop).
     _assert_close(bb.YMax - bb.YMin, 2050.0, tol_pct=5.0, name="windshield.base_width")
-    _assert_close(bb.ZMax - bb.ZMin, 750.0, tol_pct=10.0, name="windshield.vertical_span")
+    _assert_close(bb.ZMax - bb.ZMin, 380.0, tol_pct=10.0, name="windshield.vertical_span")
 
 
 @pytest.mark.requires_freecad
@@ -81,8 +81,10 @@ def test_hardtop_has_aft_taper_on_defaults(freecad_doc: object) -> None:
     # The hardtop body should be wider at the forward end than at the aft end.
     # Sample vertices at the forward and aft extremes and compare lateral spread.
     bb = deck.hardtop.body.Shape.BoundBox
-    fwd_x = bb.XMin
-    aft_x = bb.XMax
+    # spec 033 orientation fix: the bow is at HIGH X, so the hardtop's wide forward
+    # (leading) edge is at XMax and the narrow aft edge over the cockpit is at XMin.
+    fwd_x = bb.XMax
+    aft_x = bb.XMin
     fwd_y_max = max(
         abs(v.Y) for v in deck.hardtop.body.Shape.Vertexes if abs(v.X - fwd_x) < 100.0
     )

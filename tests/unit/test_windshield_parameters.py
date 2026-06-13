@@ -10,7 +10,7 @@ from storebro.deck import DeckParameterError, WindshieldParameters
 def test_defaults_construct_without_error() -> None:
     p = WindshieldParameters()
     assert p.base_z == 0.0
-    assert p.top_z == 750.0
+    assert p.top_z == 380.0  # spec 033 proportion correction (screen meets lowered hardtop)
     assert p.rake_angle_base == 35.0
     assert p.rake_angle_top == 38.0
     assert p.base_width == 2050.0

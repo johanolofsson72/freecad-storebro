@@ -13,7 +13,7 @@ def test_defaults_construct() -> None:
     assert p.width == 400.0
     assert p.height == 150.0
     # Default sits on the foredeck near the bow (bow = XMax).
-    assert p.center_x == 8500.0
+    assert p.center_x == 9400.0
 
 
 @pytest.mark.parametrize(
