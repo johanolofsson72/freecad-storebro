@@ -46,11 +46,15 @@ def test_default_hull_beam_within_one_percent_of_reference() -> None:
 
 
 def test_default_hull_height_envelope_within_reasonable_bounds() -> None:
-    """Hull Z extent must be roughly (draft + sheer_height_fwd)."""
+    """Hull Z extent must be roughly (draft + bow sheer peak).
+
+    Spec 032 sweeps the sheer up at the stem to ``sheer_height_fwd * 1.22``, so
+    the bbox height tracks draft + that peak (≈ 2.49 m) rather than draft +
+    sheer_height_fwd. The 1.22 factor mirrors ``_sheer_fwd_peak`` in hull.py.
+    """
     p = HullParameters()
     hull = build_hull(p)
     actual_height_m = hull.bbox[2]
-    expected_height_m = p.draft + p.sheer_height_fwd
-    # Allow looser tolerance on height: ±5% (the sheer line dips between
-    # transom and stem so the bbox does not track the parameter directly).
+    expected_height_m = p.draft + p.sheer_height_fwd * 1.22
+    # ±5% around the sweeping-sheer peak height.
     assert abs(actual_height_m - expected_height_m) <= expected_height_m * 0.05

@@ -49,14 +49,19 @@ def _max_x_extent_mm(sketch: object) -> float:
 
 
 def test_default_stem_is_thin_pentagon() -> None:
-    """station_count=9 (default) → stem sketch has 5 line segments
-    and a maximum X-extent of THIN_STEM_HALF_WIDTH_M * 1000 mm."""
+    """station_count=9 (default) → thin rounded stem sketch.
+
+    Spec 032 made the standard hull a 7-vertex rounded-bilge section (the
+    3-facet bilge round adds two vertices to the old 5-vertex pentagon), so the
+    closed stem loop now has 7 line segments. The stem stays thin: its maximum
+    X-extent is still THIN_STEM_HALF_WIDTH_M * 1000 mm.
+    """
     hull = build_hull()
     stem = _find_stem_sketch(hull.body)
     line_segments = [
         g for g in stem.Geometry if g.TypeId == "Part::GeomLineSegment"
     ]
-    assert len(line_segments) == 5
+    assert len(line_segments) == 7
     max_x_mm = _max_x_extent_mm(stem)
     expected_mm = THIN_STEM_HALF_WIDTH_M * 1000.0
     assert abs(max_x_mm - expected_mm) <= 1.0, (
@@ -65,13 +70,18 @@ def test_default_stem_is_thin_pentagon() -> None:
 
 
 def test_legacy_station_count_keeps_pentagon_stem() -> None:
-    """station_count=5 → stem sketch has 5 line segments and ~40 mm half-width."""
+    """station_count=5 → thin rounded stem (7 segments) and ~40 mm half-width.
+
+    Station count is longitudinal and independent of the per-station vertex
+    count; the standard hull's rounded bilge (spec 032) gives every station —
+    stem included — a 7-vertex section regardless of station_count.
+    """
     hull = build_hull(HullParameters(station_count=5))
     stem = _find_stem_sketch(hull.body)
     line_segments = [
         g for g in stem.Geometry if g.TypeId == "Part::GeomLineSegment"
     ]
-    assert len(line_segments) == 5
+    assert len(line_segments) == 7
     max_x_mm = _max_x_extent_mm(stem)
     # spec 007 legacy stem half-width = 40 mm.
     assert 35.0 <= max_x_mm <= 45.0, (

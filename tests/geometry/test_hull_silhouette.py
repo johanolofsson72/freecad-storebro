@@ -37,11 +37,16 @@ def test_hull_silhouette_beam_within_two_percent(freecad_doc: Any) -> None:
 
 
 def test_hull_silhouette_z_in_envelope(freecad_doc: Any) -> None:
-    """Bbox Z-extent in the freeboard + draft envelope (1.5m - 2.3m)."""
+    """Bbox Z-extent in the freeboard + draft envelope (1.5m - 2.6m).
+
+    Spec 032 sweeping sheer peaks the bow deck at ``sheer_height_fwd * 1.22``,
+    so the Z-extent (draft 1.10 + ~1.42 bow peak ≈ 2.49 m) sits above the old
+    2.3 m bound — the upper bound is raised to 2.6 m to match the rounded hull.
+    """
     hull = build_hull(document=freecad_doc)
     bbox_z_m = hull.body.Shape.BoundBox.ZLength / 1000.0
-    assert 1.5 <= bbox_z_m <= 2.3, (
-        f"Hull Z-extent out of envelope: expected 1.5m - 2.3m, got {bbox_z_m:.3f}m"
+    assert 1.5 <= bbox_z_m <= 2.6, (
+        f"Hull Z-extent out of envelope: expected 1.5m - 2.6m, got {bbox_z_m:.3f}m"
     )
 
 
