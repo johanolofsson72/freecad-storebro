@@ -1033,14 +1033,14 @@ class CabinWindowParameters:
     Example:
         >>> p = CabinWindowParameters()
         >>> p.count_per_side, p.length, p.height
-        (3, 900.0, 450.0)
+        (3, 1100.0, 600.0)
     """
 
-    # spec 033: a run of windows (a greenhouse band) per side, not a single port —
-    # matching the RC34 reference cabin glazing.
+    # spec 033: a tall near-continuous run of windows (a greenhouse band) per side,
+    # not a single port — matching the RC34 reference cabin glazing.
     count_per_side: int = 3
-    length: float = 900.0
-    height: float = 450.0
+    length: float = 1100.0
+    height: float = 600.0
     corner_radius: float = 80.0
     recess_depth: float = 15.0
     sill_height: float = 0.0

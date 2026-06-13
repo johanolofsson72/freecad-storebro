@@ -10,8 +10,8 @@ from storebro.deck import CabinWindowParameters, DeckParameterError
 def test_defaults_construct() -> None:
     p = CabinWindowParameters()
     assert p.count_per_side == 3  # spec 033: greenhouse window band
-    assert p.length == 900.0
-    assert p.height == 450.0  # spec 033
+    assert p.length == 1100.0  # spec 033
+    assert p.height == 600.0  # spec 033
     assert p.corner_radius == 80.0
     assert p.recess_depth == 15.0
     assert p.sill_height == 0.0
