@@ -1234,9 +1234,11 @@ def _cut_portholes(
             added.append(sketch)
             sketch.AttachmentSupport = [(datum, "")]
             sketch.MapMode = "FlatFace"
-            # Sketch local x = global X, local y = global Z.
+            # Sketch coords are LOCAL to the datum (already at global x_mm); use
+            # local X = 0 — re-adding x_mm doubled the position so the porthole was
+            # cut at 2*x (off the hull) and never actually appeared (spec 019 bug).
             circle = Part.Circle(
-                FreeCAD.Vector(x_mm, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
+                FreeCAD.Vector(0.0, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
             )
             sketch.addGeometry(circle.toShape().Curve, False)
             pocket = body.newObject("PartDesign::Pocket", f"PortholePocket{side}{seq}")
@@ -1271,8 +1273,10 @@ def _cut_portholes(
                 added.append(g_sketch)
                 g_sketch.AttachmentSupport = [(g_datum, "")]
                 g_sketch.MapMode = "FlatFace"
+                # Datum-local coords (datum already at global x_mm); local X = 0
+                # so the glass disc seats over its porthole instead of at 2*x.
                 g_circle = Part.Circle(
-                    FreeCAD.Vector(x_mm, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
+                    FreeCAD.Vector(0.0, z_center, 0), FreeCAD.Vector(0, 0, 1), radius
                 )
                 g_sketch.addGeometry(g_circle.toShape().Curve, False)
                 g_pad = g_body.newObject("PartDesign::Pad", f"PortholeGlassPad{side}{seq}")

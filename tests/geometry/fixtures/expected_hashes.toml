@@ -21,17 +21,19 @@
 
 # Seeded against FreeCAD 1.1.1
 # Source: HullParameters() defaults (Storebro Royal Cruiser 34, 1972)
-# Refreshed for v1.0.1 spec 007 hull fidelity refresh (new defaults +
-# stem_rake_angle field changes the source_hash and the geometry hashes).
+# Refreshed 2026-06-14: the source_hash (HullParameters().__repr__()) had drifted
+# since the spec 007 seed, and the porthole-placement fix (portholes now cut the
+# hull instead of being doubled off it) changes the geometry hashes. Regenerated
+# via refresh_hashes.py on FreeCAD 1.1.1.
 
-[step__1_1_1__b0380b2cc068__44136fa355b3]
-sha256 = "273dcf772c2cff97873249757978e681df294512b1a0da4548914cfab92a6cd9"
+[step__1_1_1__0c04adf357b4__44136fa355b3]
+sha256 = "41861a746e63029a974efc16835eb1b897130f195d361706633dca02d4580fa3"
 
-[stl__1_1_1__b0380b2cc068__50ebc2c69987]
-sha256 = "f6b8d800696c95f6bffdb3a16387f14991d558b2f0f2c4263dc9dc48426dfe76"
+[stl__1_1_1__0c04adf357b4__50ebc2c69987]
+sha256 = "1ea9519e7221dc96fd5db142b360fe798beeaa197dbd3264818b6ab5b071f5ce"
 
-[brep__1_1_1__b0380b2cc068__44136fa355b3]
-sha256 = "c6a68ef59052d1f4d6383a4e8c4c5ceca09513dfbc18d239cb3c4434b3d007ea"
+[brep__1_1_1__0c04adf357b4__44136fa355b3]
+sha256 = "99dbf58eafb754344f9c9f9bf5fc2084039486de2040f1401ad32a2372886567"
 
-[fcstd__1_1_1__b0380b2cc068__44136fa355b3]
-sha256 = "c9cf27e1225f30e655c382e53d683b40172daf1f688d1ec095f658a70f4e0c68"
+[fcstd__1_1_1__0c04adf357b4__44136fa355b3]
+sha256 = "f8394a0b09d9efc3de66c32a23e678706983904aea753f63afbcc3064a6cea60"
