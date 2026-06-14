@@ -4065,6 +4065,46 @@ def _build_deckhouse(
     )
 
 
+_DECKHOUSE_ROOF_THICK_MM = 55.0
+"""spec 033: thickness of the DS roof eyebrow slab."""
+_DECKHOUSE_ROOF_OVERHANG_FWD_MM = 220.0
+"""spec 033: forward (bow-side) roof overhang — the visor/brow over the windscreen."""
+_DECKHOUSE_ROOF_OVERHANG_AFT_MM = 140.0
+"""spec 033: aft roof overhang."""
+_DECKHOUSE_ROOF_OVERHANG_SIDE_MM = 75.0
+"""spec 033: side roof overhang past the deckhouse walls (the eyebrow lip)."""
+
+
+def _build_deckhouse_roof(
+    deckhouse: Deckhouse, target_doc: Any, added: list[Any]
+) -> Any:
+    """spec 033: a thin overhanging roof eyebrow on top of the DS deckhouse.
+
+    The reference greenhouse has a flat roof that overhangs the walls as a brow,
+    most prominently a forward visor over the windscreen. Built as a separate
+    ``Part::Feature`` slab (not booleaned into the deckhouse), so it cannot affect
+    the deckhouse solid's manifold. Footprint = the deckhouse plan + per-edge
+    overhangs; it sits on the deckhouse top, overlapping slightly so it reads as
+    attached. The "Deck_DeckhouseRoof" label resolves to the gelcoat-white
+    "Deck_Deckhouse" render role (render._ROLE_RULES, startswith match).
+    """
+    import FreeCAD
+    import Part
+
+    bb = deckhouse.body.Shape.BoundBox
+    # bow is at high X: forward overhang extends past XMax, aft past XMin.
+    x0 = bb.XMin - _DECKHOUSE_ROOF_OVERHANG_AFT_MM
+    x1 = bb.XMax + _DECKHOUSE_ROOF_OVERHANG_FWD_MM
+    y_half = bb.YLength / 2.0 + _DECKHOUSE_ROOF_OVERHANG_SIDE_MM
+    z0 = bb.ZMax - 8.0  # slight overlap with the deckhouse top
+    box = Part.makeBox(x1 - x0, 2.0 * y_half, _DECKHOUSE_ROOF_THICK_MM)
+    box.translate(FreeCAD.Vector(x0, -y_half, z0))
+    obj = target_doc.addObject("Part::Feature", "Deck_DeckhouseRoof")
+    obj.Shape = box
+    added.append(obj)
+    return obj
+
+
 def _cut_deckhouse_windows(
     deckhouse: Deckhouse,
     win: DsWindowParameters,
@@ -4654,6 +4694,7 @@ def build_deck(
     hardtop_pillars: HardtopPillars | None = None
     cabin_windows: CabinWindows | None = None
     deckhouse: Deckhouse | None = None
+    deckhouse_roof: Any = None  # spec 033 DS roof eyebrow (separate Part::Feature)
     _window_glass: list[Any] = []  # spec 019 translucent panes (cabin + DS windows)
     try:
         deck_plate = _build_deck_plate(hull, resolved_params, target_doc, added)
@@ -4707,6 +4748,9 @@ def build_deck(
             )
             target_doc.recompute()
             _assert_solid_manifold(deckhouse.body, "deckhouse")
+            # spec 033 — thin overhanging roof eyebrow (separate body, cannot
+            # affect the deckhouse manifold just asserted above).
+            deckhouse_roof = _build_deckhouse_roof(deckhouse, target_doc, added)
             target_doc.recompute()
         else:
             cabin_trunk = _build_cabin_trunk(
@@ -4798,6 +4842,10 @@ def build_deck(
         # spec 016 — the deckhouse colours white via the "Deck_Deckhouse"
         # render role (see render._ROLE_RULES).
         _render_targets.append(deckhouse.body)
+    if deckhouse_roof is not None:
+        # spec 033 — roof eyebrow; "Deck_DeckhouseRoof" startswith "Deck_Deckhouse"
+        # so it resolves to the same gelcoat-white role.
+        _render_targets.append(deckhouse_roof)
     if cabin_trunk is not None:
         _render_targets.append(cabin_trunk.body)
     if windshield is not None:
