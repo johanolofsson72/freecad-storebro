@@ -1172,12 +1172,12 @@ class DsWindowParameters:
     Example:
         >>> p = DsWindowParameters()
         >>> p.count_per_side, p.length, p.height
-        (3, 1000.0, 500.0)
+        (3, 1500.0, 560.0)
     """
 
     count_per_side: int = 3
-    length: float = 1000.0
-    height: float = 500.0
+    length: float = 1500.0
+    height: float = 560.0
     recess_depth: float = 15.0
     glass_panes: bool = True  # spec 019: translucent pane seated in the recess
     glass_thickness: float = 6.0

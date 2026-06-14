@@ -59,7 +59,7 @@ def test_ds_deckhouse_window_recess_count(freecad_doc: object) -> None:
     deck = build_deck(hull, superstructure_variant="ds")
     assert deck.deckhouse is not None
     # Default 3 per side, both sides → 6 blind recesses; still one solid.
-    assert deck.deckhouse.window_count == 3 * 2
+    assert deck.deckhouse.window_count == 3 * 2  # spec 033: DS greenhouse band
     assert len(deck.deckhouse.body.Shape.Solids) == 1
 
 
