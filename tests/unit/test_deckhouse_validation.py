@@ -21,7 +21,7 @@ from storebro.deck import _validate_cross_hull_deckhouse, build_deck
 
 def test_dswindow_defaults() -> None:
     w = DsWindowParameters()
-    assert (w.count_per_side, w.length, w.height, w.recess_depth) == (3, 1500.0, 560.0, 15.0)
+    assert (w.count_per_side, w.length, w.height, w.recess_depth) == (3, 1500.0, 650.0, 15.0)
 
 
 def test_dswindow_negative_count_rejected() -> None:
