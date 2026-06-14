@@ -1186,7 +1186,7 @@ class DsWindowParameters:
     front_window: bool = True
     front_length: float = 1800.0
     front_height: float = 700.0
-    mullions_per_window: int = 2
+    mullions_per_window: int = 3
     mullion_width: float = 40.0
     helm_door: bool = True
     helm_door_length: float = 650.0
