@@ -1253,7 +1253,7 @@ class DeckhouseParameters:
     forward_width: float = 2000.0
     aft_width: float = 2200.0
     height_above_deck: float = 1250.0
-    front_rake_angle: float = 30.0
+    front_rake_angle: float = 38.0
     roof_thickness: float = 60.0
     wall_inset: float = 250.0
     fwd_offset: float = 2200.0
@@ -1264,7 +1264,7 @@ class DeckhouseParameters:
         "forward_width": 2000.0,
         "aft_width": 2200.0,
         "height_above_deck": 1250.0,
-        "front_rake_angle": 30.0,
+        "front_rake_angle": 38.0,
         "roof_thickness": 60.0,
         "wall_inset": 250.0,
         "fwd_offset": 2200.0,
@@ -4067,7 +4067,7 @@ def _build_deckhouse(
 
 _DECKHOUSE_ROOF_THICK_MM = 55.0
 """spec 033: thickness of the DS roof eyebrow slab."""
-_DECKHOUSE_ROOF_OVERHANG_FWD_MM = 220.0
+_DECKHOUSE_ROOF_OVERHANG_FWD_MM = 350.0
 """spec 033: forward (bow-side) roof overhang — the visor/brow over the windscreen."""
 _DECKHOUSE_ROOF_OVERHANG_AFT_MM = 140.0
 """spec 033: aft roof overhang."""
