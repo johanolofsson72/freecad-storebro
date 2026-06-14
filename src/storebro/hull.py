@@ -304,10 +304,11 @@ class HullParameters:
         """True iff the stem uses the thin (5 mm half-width) pentagon topology.
 
         At ``station_count >= 8`` the stem station uses
-        ``StationTopology.PENTAGON_THIN_STEM`` — visually a zero-forefoot
-        bow at boat scale, topologically a 5-vertex pentagon for
-        AdditiveLoft compatibility. Below the threshold the stem retains
-        the spec 007 80 mm-forefoot pentagon (``PENTAGON_LEGACY``).
+        ``StationTopology.PENTAGON_THIN_STEM`` — a thin 5-vertex stem section for
+        AdditiveLoft compatibility. (The name is historical: spec 033 deepened the
+        stem forefoot to 0.30 m for a fuller bow, so it is no longer a literal
+        zero-forefoot stem — only the section *width* is thin.) Below the threshold
+        the stem retains the spec 007 80 mm-forefoot pentagon (``PENTAGON_LEGACY``).
         """
         return self.station_count >= B_SPLINE_STATION_COUNT_THRESHOLD
 
@@ -535,7 +536,11 @@ def _compute_stations(
             topology = StationTopology.PENTAGON_THIN_STEM
             half_beam_top = THIN_STEM_HALF_WIDTH_M
             half_beam_bot = THIN_STEM_HALF_WIDTH_M
-            keel_depth = 0.08  # match spec 007 stem keel depth
+            # spec 033: deeper forefoot so the bow carries volume below the
+            # waterline (a fuller stem like the RC34 reference) instead of the
+            # shallow 0.08 m near-zero forefoot. The keel eases from draft*0.75 at
+            # s=0.75 to this depth at the stem — a smooth Ruled=True transition.
+            keel_depth = 0.30
             freeboard = p.sheer_height_fwd
             vertex_count = vcount
             bilge_radius_m = 0.0

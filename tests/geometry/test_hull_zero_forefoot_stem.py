@@ -3,10 +3,11 @@
 Implementation drift (documented in StationTopology docstring + spec 009
 closure note): the spec's ``DEGENERATE_VERTEX`` topology was found to
 overshoot wildly under Ruled=False loft interpolation. The implementation
-substitutes ``PENTAGON_THIN_STEM`` — a 5-vertex pentagon with 5 mm
-half-width. Visually equivalent to "zero forefoot" at boat scale (10 mm
-stem face vs spec 007's 80 mm); topologically compatible with the
-B-spline loft.
+substitutes ``PENTAGON_THIN_STEM`` — a thin-WIDTH stem section (5 mm
+half-width, rounded to 7 vertices since spec 032). Spec 033 deepened its
+forefoot to 0.30 m for a fuller bow, so it is no longer a literal "zero
+forefoot" — only the section width is thin. Topologically compatible with
+the loft.
 
 When ``station_count >= 8``, the stem station MUST use the thin pentagon.
 When ``station_count < 8``, the stem MUST retain the spec 007
