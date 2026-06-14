@@ -17,8 +17,8 @@ from storebro.interior import (
 def test_ds_window_spec023_defaults() -> None:
     p = DsWindowParameters()
     assert p.front_window is True
-    assert p.front_length == 1400.0
-    assert p.front_height == 420.0
+    assert p.front_length == 1800.0
+    assert p.front_height == 700.0
     assert p.mullions_per_window == 2  # spec 033: more divided window band
     assert p.mullion_width == 40.0
     assert p.helm_door is True

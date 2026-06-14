@@ -61,8 +61,8 @@ def test_spec022_defaults() -> None:
     assert p.outboard_fillet == 12.0
     assert p.chamfer_width == 12.0
     assert p.chrome_insert is True
-    assert p.insert_height == 18.0
-    assert p.insert_thickness == 8.0
+    assert p.insert_height == 30.0
+    assert p.insert_thickness == 12.0
 
 
 @pytest.mark.parametrize("field", ["outboard_fillet", "chamfer_width"])

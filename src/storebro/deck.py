@@ -815,8 +815,8 @@ class RubrailParameters:
     outboard_fillet: float = 12.0  # rounded outboard-face radius (opt-in)
     chamfer_width: float = 12.0  # chamfered outboard bevel (reproducible default)
     chrome_insert: bool = True
-    insert_height: float = 18.0
-    insert_thickness: float = 8.0
+    insert_height: float = 30.0
+    insert_thickness: float = 12.0
 
     def __post_init__(self) -> None:
         _reject_nonfinite_floats(self)
@@ -1172,20 +1172,20 @@ class DsWindowParameters:
     Example:
         >>> p = DsWindowParameters()
         >>> p.count_per_side, p.length, p.height
-        (3, 1500.0, 650.0)
+        (3, 1500.0, 850.0)
     """
 
     count_per_side: int = 3
     length: float = 1500.0
-    height: float = 650.0
+    height: float = 850.0
     recess_depth: float = 15.0
     glass_panes: bool = True  # spec 019: translucent pane seated in the recess
     glass_thickness: float = 6.0
     # spec 023 — front-window recess on the raked screen, side-window mullions,
     # and a helm-door recess (all blind, all on the deckhouse body only).
     front_window: bool = True
-    front_length: float = 1400.0
-    front_height: float = 420.0
+    front_length: float = 1800.0
+    front_height: float = 700.0
     mullions_per_window: int = 2
     mullion_width: float = 40.0
     helm_door: bool = True
