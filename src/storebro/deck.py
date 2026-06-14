@@ -4402,11 +4402,14 @@ def _detail_deckhouse(
                     added.append(sk)
                     sk.AttachmentSupport = [(datum, "")]
                     sk.MapMode = "FlatFace"
+                    # Sketch coords are LOCAL to the datum (already at global bx, cz);
+                    # centre the bar on the datum origin, do not re-add bx/cz (that
+                    # doubled the position, floating mullions off the boat).
                     mpts = [
-                        FreeCAD.Vector(bx - hw, cz - half_h, 0),
-                        FreeCAD.Vector(bx + hw, cz - half_h, 0),
-                        FreeCAD.Vector(bx + hw, cz + half_h, 0),
-                        FreeCAD.Vector(bx - hw, cz + half_h, 0),
+                        FreeCAD.Vector(-hw, -half_h, 0),
+                        FreeCAD.Vector(hw, -half_h, 0),
+                        FreeCAD.Vector(hw, half_h, 0),
+                        FreeCAD.Vector(-hw, half_h, 0),
                     ]
                     mids = [
                         sk.addGeometry(Part.LineSegment(mpts[i], mpts[(i + 1) % 4]), False)
@@ -4469,11 +4472,14 @@ def _detail_deckhouse(
             sk.MapMode = "FlatFace"
             hl = win.helm_door_length / 2.0
             hh = win.helm_door_height / 2.0
+            # Sketch coords are LOCAL to the datum (already at global door_x, door_cz);
+            # centre on the datum origin — re-adding door_x/door_cz doubled the
+            # position so the pocket fell off the hull and cut nothing.
             dpts = [
-                FreeCAD.Vector(door_x - hl, door_cz - hh, 0),
-                FreeCAD.Vector(door_x + hl, door_cz - hh, 0),
-                FreeCAD.Vector(door_x + hl, door_cz + hh, 0),
-                FreeCAD.Vector(door_x - hl, door_cz + hh, 0),
+                FreeCAD.Vector(-hl, -hh, 0),
+                FreeCAD.Vector(hl, -hh, 0),
+                FreeCAD.Vector(hl, hh, 0),
+                FreeCAD.Vector(-hl, hh, 0),
             ]
             dids = [
                 sk.addGeometry(Part.LineSegment(dpts[i], dpts[(i + 1) % 4]), False)

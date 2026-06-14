@@ -60,8 +60,21 @@ def test_mullions_present(freecad_doc: object) -> None:
     assert len(dh.body.Shape.Solids) == 1
     mbodies = [o for o in deck.document.Objects if o.Label.startswith("Deck_DeckhouseMullion")]
     assert mbodies
+    # spec 033 regression guard: mullions sit ON the deckhouse walls, inside its
+    # X/Z envelope — not doubled off the hull (the sketch-coord bug that placed
+    # them at 2*x, floating above and aft of the boat).
+    hb = deck.deckhouse.body.Shape.BoundBox
     for m in mbodies:
         assert len(m.Shape.Solids) == 1 and m.Shape.isValid()
+        mb = m.Shape.BoundBox
+        assert hb.XMin - 100.0 <= mb.XMin and mb.XMax <= hb.XMax + 100.0, (
+            f"mullion {m.Label} X[{mb.XMin:.0f},{mb.XMax:.0f}] outside deckhouse "
+            f"X[{hb.XMin:.0f},{hb.XMax:.0f}]"
+        )
+        assert hb.ZMin - 100.0 <= mb.ZMin and mb.ZMax <= hb.ZMax + 100.0, (
+            f"mullion {m.Label} Z[{mb.ZMin:.0f},{mb.ZMax:.0f}] outside deckhouse "
+            f"Z[{hb.ZMin:.0f},{hb.ZMax:.0f}]"
+        )
 
 
 @pytest.mark.requires_freecad
